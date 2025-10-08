@@ -184,7 +184,8 @@ def main():
                                     depth_image=depth_image_meters,
                                     color_image=color_image,
                                     intrinsics=intr_matrix,
-                                    T_cam2base=T_cam2base
+                                    T_cam2base=T_cam2base,
+                                    object_class=obj['class']  # 传入物体类别
                                 )
                                 pose_end = time.time()
                                 
