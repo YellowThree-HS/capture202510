@@ -1,6 +1,7 @@
 """
 Intel RealSense Camera Class
 支持多种 RealSense 相机型号（D435, D455, D415, L515 等）
+根据相机型号自动配置最佳参数
 """
 
 import pyrealsense2 as rs
@@ -11,48 +12,106 @@ import os
 from typing import Tuple, Optional, Dict, List
 
 
+# 预定义各型号相机的最佳配置
+CAMERA_CONFIGS = {
+    'D435': {
+        'color': {'width': 1280, 'height': 720, 'fps': 30, 'format': rs.format.bgr8},
+        'depth': {'width': 1280, 'height': 720, 'fps': 30, 'format': rs.format.z16},
+        'description': 'Intel RealSense D435'
+    },
+    'D435I': {
+        'color': {'width': 1280, 'height': 720, 'fps': 30, 'format': rs.format.bgr8},
+        'depth': {'width': 1280, 'height': 720, 'fps': 30, 'format': rs.format.z16},
+        'description': 'Intel RealSense D435i (with IMU)'
+    },
+    'D455': {
+        'color': {'width': 1280, 'height': 720, 'fps': 30, 'format': rs.format.bgr8},
+        'depth': {'width': 1280, 'height': 720, 'fps': 30, 'format': rs.format.z16},
+        'description': 'Intel RealSense D455'
+    },
+    'D415': {
+        'color': {'width': 1280, 'height': 720, 'fps': 30, 'format': rs.format.bgr8},
+        'depth': {'width': 1280, 'height': 720, 'fps': 30, 'format': rs.format.z16},
+        'description': 'Intel RealSense D415'
+    },
+    'L515': {
+        'color': {'width': 1920, 'height': 1080, 'fps': 30, 'format': rs.format.bgr8},
+        'depth': {'width': 1024, 'height': 768, 'fps': 30, 'format': rs.format.z16},
+        'description': 'Intel RealSense L515 (LiDAR)'
+    },
+    'SR305': {
+        'color': {'width': 1920, 'height': 1080, 'fps': 30, 'format': rs.format.bgr8},
+        'depth': {'width': 640, 'height': 480, 'fps': 30, 'format': rs.format.z16},
+        'description': 'Intel RealSense SR305'
+    },
+    'DEFAULT': {
+        'color': {'width': 640, 'height': 480, 'fps': 30, 'format': rs.format.bgr8},
+        'depth': {'width': 640, 'height': 480, 'fps': 30, 'format': rs.format.z16},
+        'description': 'Default configuration'
+    }
+}
+
+
 class Camera:
     """
-    RealSense 相机类，支持多种型号
+    RealSense 相机类，根据型号自动配置最佳参数
 
     支持的相机型号：
-    - D435, D435i
+    - D435, D435i (D435I)
     - D455
     - D415
     - L515
     - SR305
-    等所有 Intel RealSense 相机
+    - 或使用 'AUTO' 自动检测
     """
 
     def __init__(
         self,
-        width: int = 640,
-        height: int = 480,
-        fps: int = 30,
+        camera_model: str = 'AUTO',
         enable_depth: bool = True,
         enable_color: bool = True,
         serial_number: Optional[str] = None,
-        align_to_color: bool = True
+        align_to_color: bool = True,
+        custom_config: Optional[Dict] = None
     ):
         """
         初始化 RealSense 相机
 
         参数:
-            width: 图像宽度，默认 640
-            height: 图像高度，默认 480
-            fps: 帧率，默认 30
+            camera_model: 相机型号，支持 'D435', 'D435I', 'D455', 'D415', 'L515', 'SR305', 'AUTO'
+                         'AUTO' 会自动检测连接的相机型号
             enable_depth: 是否启用深度流，默认 True
             enable_color: 是否启用彩色流，默认 True
             serial_number: 相机序列号，用于多相机场景，默认 None（使用第一个相机）
             align_to_color: 是否将深度对齐到彩色图像，默认 True
+            custom_config: 自定义配置字典，会覆盖默认配置
+                          格式: {'color': {'width': 1280, 'height': 720, 'fps': 30}, 
+                                'depth': {...}}
+        
+        示例:
+            # 自动检测型号
+            cam = Camera()
+            
+            # 指定型号
+            cam = Camera(camera_model='D435')
+            
+            # 自定义配置
+            cam = Camera(camera_model='D455', custom_config={
+                'color': {'width': 1920, 'height': 1080, 'fps': 30}
+            })
         """
-        self.width = width
-        self.height = height
-        self.fps = fps
+        self.camera_model = camera_model.upper()
         self.enable_depth = enable_depth
         self.enable_color = enable_color
         self.serial_number = serial_number
         self.align_to_color = align_to_color
+        self.custom_config = custom_config
+
+        # 配置参数（初始化后确定）
+        self.width = None
+        self.height = None
+        self.fps = None
+        self.config_info = {}
 
         # RealSense 对象
         self.pipeline = None
@@ -68,9 +127,91 @@ class Camera:
         # 初始化相机
         self._initialize()
 
+    def _detect_camera_model(self) -> str:
+        """
+        自动检测连接的相机型号
+        
+        返回:
+            相机型号名称
+        """
+        ctx = rs.context()
+        devices = ctx.query_devices()
+        
+        if len(devices) == 0:
+            raise RuntimeError("未找到 RealSense 设备")
+        
+        # 选择设备
+        device = None
+        if self.serial_number:
+            for dev in devices:
+                if dev.get_info(rs.camera_info.serial_number) == self.serial_number:
+                    device = dev
+                    break
+            if device is None:
+                raise RuntimeError(f"未找到序列号为 {self.serial_number} 的设备")
+        else:
+            device = devices[0]
+        
+        # 获取产品线（型号）
+        product_line = device.get_info(rs.camera_info.product_line)
+        name = device.get_info(rs.camera_info.name)
+        
+        print(f"检测到相机: {name} (产品线: {product_line})")
+        
+        # 根据产品线判断型号
+        if 'D435I' in name.upper() or 'D435 I' in name.upper():
+            return 'D435I'
+        elif 'D435' in name.upper():
+            return 'D435'
+        elif 'D455' in name.upper():
+            return 'D455'
+        elif 'D415' in name.upper():
+            return 'D415'
+        elif 'L515' in name.upper():
+            return 'L515'
+        elif 'SR305' in name.upper():
+            return 'SR305'
+        else:
+            print(f"警告: 未识别的型号 '{name}'，使用默认配置")
+            return 'DEFAULT'
+
+    def _get_camera_config(self) -> Dict:
+        """
+        获取相机配置
+        
+        返回:
+            相机配置字典
+        """
+        # 如果是 AUTO，自动检测
+        if self.camera_model == 'AUTO':
+            self.camera_model = self._detect_camera_model()
+        
+        # 获取基础配置
+        if self.camera_model in CAMERA_CONFIGS:
+            config = CAMERA_CONFIGS[self.camera_model].copy()
+        else:
+            print(f"警告: 不支持的型号 '{self.camera_model}'，使用默认配置")
+            config = CAMERA_CONFIGS['DEFAULT'].copy()
+            self.camera_model = 'DEFAULT'
+        
+        # 应用自定义配置
+        if self.custom_config:
+            if 'color' in self.custom_config:
+                config['color'].update(self.custom_config['color'])
+            if 'depth' in self.custom_config:
+                config['depth'].update(self.custom_config['depth'])
+        
+        return config
+
     def _initialize(self):
         """初始化相机配置"""
         try:
+            # 获取相机配置
+            config_dict = self._get_camera_config()
+            self.config_info = config_dict
+            
+            print(f"使用配置: {config_dict['description']}")
+            
             # 创建 pipeline 和 config
             self.pipeline = rs.pipeline()
             self.config = rs.config()
@@ -81,22 +222,27 @@ class Camera:
 
             # 配置彩色流
             if self.enable_color:
+                color_cfg = config_dict['color']
                 self.config.enable_stream(
                     rs.stream.color,
-                    self.width,
-                    self.height,
-                    rs.format.bgr8,
-                    self.fps
+                    color_cfg['width'],
+                    color_cfg['height'],
+                    color_cfg['format'],
+                    color_cfg['fps']
                 )
+                self.width = color_cfg['width']
+                self.height = color_cfg['height']
+                self.fps = color_cfg['fps']
 
             # 配置深度流
             if self.enable_depth:
+                depth_cfg = config_dict['depth']
                 self.config.enable_stream(
                     rs.stream.depth,
-                    self.width,
-                    self.height,
-                    rs.format.z16,
-                    self.fps
+                    depth_cfg['width'],
+                    depth_cfg['height'],
+                    depth_cfg['format'],
+                    depth_cfg['fps']
                 )
 
             # 启动 pipeline
@@ -379,6 +525,22 @@ class Camera:
             [0, 0, 1]
         ])
         return K
+    
+    def get_distortion_coeffs(self, stream_type: str = 'color') -> Optional[np.ndarray]:
+        """
+        获取相机畸变系数
+
+        参数:
+            stream_type: 'color' 或 'depth'
+
+        返回:
+            畸变系数数组
+        """
+        if stream_type not in self.intrinsics:
+            return None
+
+        intr = self.intrinsics[stream_type]
+        return np.array(intr['coeffs'])
 
     def get_device_info_dict(self) -> Dict:
         """获取设备信息字典"""
@@ -453,32 +615,76 @@ class Camera:
 if __name__ == "__main__":
     # 测试代码
     print("RealSense Camera Class Test")
-    print("=" * 50)
+    print("=" * 80)
 
     # 列出所有设备
     Camera.print_devices()
 
-    # 创建相机实例
+    print("\n" + "=" * 80)
+    print("测试用例:")
+    print("=" * 80)
+
+    # 测试 1: 自动检测型号
     try:
-        with Camera(width=640, height=480, fps=30) as cam:
-            print("\n开始捕获图像...")
-
-            # 捕获并保存
-            paths = cam.capture(save_dir="test_images")
-
-            # 显示图像
+        print("\n[测试 1] 自动检测相机型号")
+        print("-" * 80)
+        with Camera(camera_model='AUTO') as cam:
+            print(f"✓ 检测到型号: {cam.camera_model}")
+            print(f"✓ 配置: {cam.width}x{cam.height}@{cam.fps}fps")
+            
+            # 捕获图像
             color_image, depth_image = cam.get_frames()
-
             if color_image is not None:
-                cv2.imshow("Color", color_image)
-
+                print(f"✓ 彩色图像尺寸: {color_image.shape}")
+                cv2.imshow("Auto - Color", color_image)
+            
             if depth_image is not None:
                 depth_colormap = cam.get_depth_colormap(depth_image)
-                cv2.imshow("Depth", depth_colormap)
-
-            print("\n按任意键退出...")
+                cv2.imshow("Auto - Depth", depth_colormap)
+            
+            print("按任意键继续...")
             cv2.waitKey(0)
             cv2.destroyAllWindows()
-
+            
     except Exception as e:
-        print(f"错误: {e}")
+        print(f"✗ 测试 1 失败: {e}")
+
+    # 测试 2: 指定型号
+    try:
+        print("\n[测试 2] 指定相机型号 (D435)")
+        print("-" * 80)
+        with Camera(camera_model='D435') as cam:
+            print(f"✓ 使用型号: {cam.camera_model}")
+            print(f"✓ 配置: {cam.width}x{cam.height}@{cam.fps}fps")
+            
+            # 捕获并保存
+            paths = cam.capture(save_dir="test_images", prefix="d435")
+            print(f"✓ 已保存文件:")
+            for key, path in paths.items():
+                print(f"    {key}: {path}")
+                
+    except Exception as e:
+        print(f"✗ 测试 2 失败: {e}")
+
+    # 测试 3: 自定义配置
+    try:
+        print("\n[测试 3] 使用自定义配置")
+        print("-" * 80)
+        custom = {
+            'color': {'width': 1920, 'height': 1080, 'fps': 30},
+            'depth': {'width': 1280, 'height': 720, 'fps': 30}
+        }
+        with Camera(camera_model='AUTO', custom_config=custom) as cam:
+            print(f"✓ 型号: {cam.camera_model}")
+            print(f"✓ 自定义配置: {cam.width}x{cam.height}@{cam.fps}fps")
+            
+            color_image = cam.get_color_image()
+            if color_image is not None:
+                print(f"✓ 实际图像尺寸: {color_image.shape}")
+                
+    except Exception as e:
+        print(f"✗ 测试 3 失败: {e}")
+
+    print("\n" + "=" * 80)
+    print("所有测试完成")
+    print("=" * 80)
