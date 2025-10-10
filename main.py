@@ -231,7 +231,7 @@ def main():
                         print("\n⚠️ 未获取到深度图，无法进行位姿估计")
                     
                 else:
-                    print(f"\n✗ 检测失败: {result.get('message', 'Unknown error')}")
+                    print(f"\n✗ 检测失败")
                 
                 # 删除临时文件
                 if os.path.exists(temp_image_path):

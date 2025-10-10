@@ -4,6 +4,26 @@ import numpy as np
 import time
 import os
 from PIL import Image
+from functools import wraps
+
+
+def timer(func):
+    """
+    计时装饰器：统计函数执行时间
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        
+        # 获取函数名
+        func_name = func.__name__
+        print(f"⏱️  [{func_name}] took {elapsed_time:.3f} seconds")
+        
+        return result
+    return wrapper
 
 
 class YOLOSegmentator:
@@ -26,71 +46,142 @@ class YOLOSegmentator:
         self.seg_model = FastSAM(sam_weights)
         self.seg_model.to(self.device)
 
-    def detect_and_segment(self, image_path, categories, output_dir="result", conf=0.1, imgsz=640):
+    @timer
+    def detect(self, image_path, categories, output_dir="result", conf=0.1, imgsz=640, save_result=True):
         """
-        先用 YOLO-World 检测，然后用 FastSAM 分割置信度最高的目标。
+        使用 YOLO-World 检测图像中的物体
+        
+        参数:
+            image_path: 图像路径
+            categories: 要检测的类别列表
+            output_dir: 输出目录
+            conf: 置信度阈值
+            imgsz: 图像大小
+            
+        返回:
+            dict: {
+                'success': bool,
+                'det_bboxes': YOLO result object (包含boxes, cls, conf等),
+                'detection_path': str (保存的检测结果路径)
+            }
         """
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
 
-        # --- 步骤 1: 检测 (YOLO-World) ---
         print("\n--- Running YOLO-World Detection ---")
-        start_det = time.time()
 
         self.det_model.set_classes(categories)
 
+        #如果predict多个img，对于有多个img的结果.list
         det_results = self.det_model.predict(
             image_path,
             conf=conf,
             imgsz=imgsz,
-            device=self.device,  # 明确指定设备
-            verbose=False  # 减少不必要的输出
+            device=self.device,
+            verbose=False
         )
 
+        #det_results包含了大量的信息，包括.boxes(xyxy,cls,conf),orig_img,names,speed等等
         result = det_results[0]
-        end_det = time.time()
-        print(f"YOLO-World detection took {end_det - start_det:.3f} seconds.")
 
+        #错误提示
         if len(result.boxes) == 0:
             print("No objects detected by YOLO-World.")
-            return {'success': False, 'message': 'No objects detected.'}
+            return {'success': False, 'det_bboxes': None, 'detection_path': None}
 
-        if len(result.boxes.conf) == 0:
-            print("No objects detected after filtering.")
-            return {'success': False, 'message': 'No objects detected after filtering.'}
+        #保存结果
+        if save_result:
+             # 保存检测结果（带标签的检测框）
+            det_output_filename = os.path.join(output_dir, f"det_{os.path.basename(image_path)}")
+            result.save(det_output_filename)
+            print('YOLO-World results:')
+            print(f"Detection result saved to {det_output_filename}")
+            print(f"Found {len(result.boxes)} objects")
 
-        max_index_gpu = result.boxes.conf.argmax()
-        best_box_gpu = result.boxes.xyxy[max_index_gpu]
-        best_class_id_gpu = result.boxes.cls[max_index_gpu]
-        best_confidence_gpu = result.boxes.conf[max_index_gpu]
+        result_dict = {
+            'success': True,
+            'det_bboxes': result.boxes,
+            'detection_path': det_output_filename if save_result else None
+        }
 
-        # 将最终结果移至 CPU
-        best_box_xyxy = best_box_gpu.cpu().numpy().astype(int)
-        best_class_name = self.det_model.names[int(best_class_id_gpu.cpu())]
-        best_confidence = float(best_confidence_gpu.cpu())
+        return result_dict
 
-        # 保存检测结果（带标签的检测框）
-        det_output_filename = os.path.join(output_dir, f"det_{os.path.basename(image_path)}")
-        result.save(det_output_filename)
-        print(f"Detection result with labels saved to {det_output_filename}")
+    @timer
+    def segment(self, image_path, bbox_gpu, output_dir="result", save_result=True):
+        """
+        使用 FastSAM 对指定边界框进行分割
+        
+        参数:
+            image_path: 图像路径
+            bbox_gpu: 边界框张量 (在GPU上，格式为 xyxy)
+            output_dir: 输出目录
+            save_result: 是否保存分割结果
+            
+        返回:
+            dict: {
+                'success': bool,
+                'mask': np.ndarray (分割掩码),
+                'segmentation_path': str (如果保存了结果)
+            }
+        """
 
-        start_sam = time.time()
-        sam_results = self.seg_model(image_path, bboxes=best_box_gpu)
+        sam_results = self.seg_model(image_path, bboxes=bbox_gpu.unsqueeze(0))
 
-        # 保存分割结果
-        seg_output_filename = os.path.join(output_dir, f"seg_{os.path.basename(image_path)}")
-        sam_results[0].save(seg_output_filename)
-        print(f"Segmentation result saved to {seg_output_filename}")
-
-        end_sam = time.time()
-        print(f"FastSAM segmentation took {end_sam - start_sam:.3f} seconds.")
 
         # 提取掩码数据
         mask = None
         if sam_results[0].masks is not None and len(sam_results[0].masks) > 0:
-            # 获取第一个掩码（通常是最主要的物体）
             mask = sam_results[0].masks.data[0].cpu().numpy().astype(np.uint8)
-            print(f"Mask extracted with shape: {mask.shape}")
+
+
+
+        # 保存分割结果
+        if save_result:
+            seg_output_filename = os.path.join(output_dir, f"seg_{os.path.basename(image_path)}")
+            sam_results[0].save(seg_output_filename)
+            print('FastSAM results:')
+            print(f"Segmentation result saved to {seg_output_filename}")
+
+        result_dict = {
+            'success': True,
+            'mask': mask,
+            'segmentation_path': seg_output_filename if save_result else None
+        }
+
+        return result_dict
+
+    def detect_and_segment(self, image_path, categories, output_dir="result", conf=0.1, imgsz=640, save_result=True):
+        """
+        先用 YOLO-World 检测，然后用 FastSAM 分割置信度最高的目标。
+        **只分割全局置信度最高的1个物体
+        """
+        if save_result:
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+        # 步骤1: 检测
+        det_result = self.detect(image_path, categories, output_dir, conf, imgsz)
+        
+        if not det_result['success']:
+            return det_result
+        
+        det_bboxes = det_result['det_bboxes']
+        
+
+        # 找到置信度最高的一个物体-------------------------------------------------------
+        max_index_gpu = det_bboxes.conf.argmax()
+        best_box_gpu = det_bboxes.xyxy[max_index_gpu]
+        best_class_id_gpu = det_bboxes.cls[max_index_gpu]
+        best_confidence_gpu = det_bboxes.conf[max_index_gpu]
+
+        # 将结果移至 CPU
+        best_box_xyxy = best_box_gpu.cpu().numpy().astype(int)
+        best_class_name = self.det_model.names[int(best_class_id_gpu.cpu())]
+        best_confidence = float(best_confidence_gpu.cpu())
+
+        #-------------------------------------------------------------------------------------------
+
+        print(f"\nBest object: {best_class_name} (confidence: {best_confidence:.2f})")
+
+        # 步骤2: 分割
+        seg_result = self.segment(image_path, best_box_gpu, output_dir, save_result=save_result)
 
         return {
             'success': True,
@@ -99,14 +190,15 @@ class YOLOSegmentator:
                 'confidence': best_confidence,
                 'bbox_xyxy': best_box_xyxy.tolist()
             },
-            'detection_path': det_output_filename,
-            'segmentation_path': seg_output_filename,
-            'mask': mask  # 添加掩码数据
+            'mask': seg_result['mask'],
+            'detection_path': det_result['detection_path'] if save_result else None,
+            'segmentation_path': seg_result.get('segmentation_path') if save_result else None
         }
     
-    def detect_and_segment_all(self, image_path, categories, output_dir="result", conf=0.1, imgsz=640):
+    def detect_and_segment_all(self, image_path, categories, output_dir="result", conf=0.1, imgsz=640,save_result=True):
         """
-        检测并分割所有指定类别的物体
+        检测并分割所有指定类别的物体（每个类别只保留置信度最高的）
+        (使用 detect 和 segment 函数实现)
         
         返回:
             dict: {
@@ -122,98 +214,53 @@ class YOLOSegmentator:
                 ]
             }
         """
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
-        # --- 步骤 1: 检测 (YOLO-World) ---
-        print("\n--- Running YOLO-World Detection (All Objects) ---")
-        start_det = time.time()
-
-        self.det_model.set_classes(categories)
-
-        det_results = self.det_model.predict(
-            image_path,
-            conf=conf,
-            imgsz=imgsz,
-            device=self.device,
-            verbose=False
-        )
-
-        result = det_results[0]
-        end_det = time.time()
-        print(f"YOLO-World detection took {end_det - start_det:.3f} seconds.")
-
-        if len(result.boxes) == 0:
-            print("No objects detected by YOLO-World.")
-            return {'success': False, 'message': 'No objects detected.', 'objects': []}
-
-        # 保存检测结果
-        det_output_filename = os.path.join(output_dir, f"det_{os.path.basename(image_path)}")
-        result.save(det_output_filename)
-        print(f"Detection result saved to {det_output_filename}")
-
-        # --- 步骤 2: 对每个类别只保留置信度最高的物体 ---
-        print(f"\nFound {len(result.boxes)} objects, filtering to best per category...")
+        if save_result:
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+        # 步骤1: 检测
+        det_result = self.detect(image_path, categories, output_dir, conf, imgsz)
         
-        # 按类别分组，找出每个类别置信度最高的物体
+        if not det_result['success']:
+            return det_result
+        
+        det_bboxes = det_result['det_bboxes']
+
+        # 步骤2: 对每个类别只保留置信度最高的物体
+        print(f"\nFound {len(det_bboxes)} objects, filtering to best per category...")
+
+        # 创建 (idx, class_name, confidence) 的列表并按类别分组
         best_per_class = {}
-        for idx in range(len(result.boxes)):
-            class_id = int(result.boxes.cls[idx].cpu())
-            class_name = self.det_model.names[class_id]
-            confidence = float(result.boxes.conf[idx].cpu())
-            
-            # 如果这个类别还没有记录，或者当前物体置信度更高
-            if class_name not in best_per_class or confidence > best_per_class[class_name]['confidence']:
-                best_per_class[class_name] = {
-                    'idx': idx,
-                    'confidence': confidence,
-                    'class_name': class_name
-                }
+        for idx in range(len(det_bboxes)):
+            info = {
+                'idx': idx,
+                'class_name': self.det_model.names[int(det_bboxes.cls[idx].cpu())],
+                'confidence': float(det_bboxes.conf[idx].cpu())
+            }
+            class_name = info['class_name']
+            # 如果该类别不存在或当前物体置信度更高，则更新
+            if class_name not in best_per_class or info['confidence'] > best_per_class[class_name]['confidence']:
+                best_per_class[class_name] = info
+    
+
+        # 步骤3: 对筛选后的物体进行分割
+        print(f"\nStarting segmentation for {len(best_per_class)} objects...")
         
-        print(f"Filtered to {len(best_per_class)} objects (one per category):")
-        for class_name, info in best_per_class.items():
-            print(f"  - {class_name}: confidence {info['confidence']:.2f}")
-        
-        # --- 步骤 3: 对筛选后的物体进行分割 ---
-        detected_objects = []
-        
-        for class_name, info in best_per_class.items():
-            idx = info['idx']
-            box_gpu = result.boxes.xyxy[idx]
-            class_id_gpu = result.boxes.cls[idx]
-            confidence_gpu = result.boxes.conf[idx]
-            
-            # 转换到CPU
-            box_xyxy = box_gpu.cpu().numpy().astype(int)
-            confidence = float(confidence_gpu.cpu())
-            
-            print(f"\nProcessing {class_name} (confidence: {confidence:.2f})...")
-            
-            # 使用FastSAM分割
-            start_sam = time.time()
-            sam_results = self.seg_model(image_path, bboxes=box_gpu.unsqueeze(0))
-            end_sam = time.time()
-            
-            # 提取掩码
-            mask = None
-            if sam_results[0].masks is not None and len(sam_results[0].masks) > 0:
-                mask = sam_results[0].masks.data[0].cpu().numpy().astype(np.uint8)
-                print(f"  Mask shape: {mask.shape}, SAM time: {end_sam - start_sam:.3f}s")
-            
-            detected_objects.append({
+        detected_objects = [
+            {
                 'class': class_name,
-                'confidence': confidence,
-                'bbox_xyxy': box_xyxy.tolist(),
-                'mask': mask
-            })
+                'confidence': info['confidence'],
+                'bbox_xyxy': det_bboxes.xyxy[info['idx']].cpu().numpy().astype(int).tolist(),
+                'mask': self.segment(image_path, det_bboxes.xyxy[info['idx']], output_dir, save_result=save_result)['mask']
+            }
+            for class_name, info in best_per_class.items()
+        ]
         
-        # 保存综合分割结果
-        print(f"\nTotal objects after filtering: {len(detected_objects)}")
+        print(f"\nTotal objects processed: {len(detected_objects)}")
         
         return {
             'success': True,
             'objects': detected_objects,
-            'detection_path': det_output_filename
+            'detection_path': det_result['detection_path']
         }
 
 if __name__ == "__main__":
