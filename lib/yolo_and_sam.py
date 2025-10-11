@@ -47,12 +47,12 @@ class YOLOSegmentator:
         self.seg_model.to(self.device)
 
     @timer
-    def detect(self, image_path, categories, output_dir="result", conf=0.1, imgsz=640, save_result=True):
+    def detect(self, image, categories, output_dir="result", conf=0.1, imgsz=640, save_result=True):
         """
         使用 YOLO-World 检测图像中的物体
         
         参数:
-            image_path: 图像路径
+            image: 图像数据 (numpy 数组格式)/图像路径
             categories: 要检测的类别列表
             output_dir: 输出目录
             conf: 置信度阈值
@@ -70,9 +70,13 @@ class YOLOSegmentator:
 
         self.det_model.set_classes(categories)
 
+        if type(image) == str:
+            pass
+        elif isinstance(image, list):
+            image = Image.fromarray(image)
         #如果predict多个img，对于有多个img的结果.list
         det_results = self.det_model.predict(
-            image_path,
+            source=image,
             conf=conf,
             imgsz=imgsz,
             device=self.device,
@@ -90,7 +94,7 @@ class YOLOSegmentator:
         #保存结果
         if save_result:
              # 保存检测结果（带标签的检测框）
-            det_output_filename = os.path.join(output_dir, f"det_{os.path.basename(image_path)}")
+            det_output_filename = os.path.join(output_dir, f"det_{os.path.basename(image) if isinstance(image, str) else 'cam.png'}")
             result.save(det_output_filename)
             print('YOLO-World results:')
             print(f"Detection result saved to {det_output_filename}")
@@ -105,12 +109,12 @@ class YOLOSegmentator:
         return result_dict
 
     @timer
-    def segment(self, image_path, bbox_gpu, output_dir="result", save_result=True):
+    def segment(self, image, bbox_gpu, output_dir, save_result):
         """
         使用 FastSAM 对指定边界框进行分割
         
         参数:
-            image_path: 图像路径
+            image: 图像数据 (numpy 数组格式) | 图片地址
             bbox_gpu: 边界框张量 (在GPU上，格式为 xyxy)
             output_dir: 输出目录
             save_result: 是否保存分割结果
@@ -123,7 +127,7 @@ class YOLOSegmentator:
             }
         """
 
-        sam_results = self.seg_model(image_path, bboxes=bbox_gpu.unsqueeze(0))
+        sam_results = self.seg_model(image, bboxes=bbox_gpu.unsqueeze(0))
 
 
         # 提取掩码数据
@@ -135,7 +139,7 @@ class YOLOSegmentator:
 
         # 保存分割结果
         if save_result:
-            seg_output_filename = os.path.join(output_dir, f"seg_{os.path.basename(image_path)}")
+            seg_output_filename = os.path.join(output_dir, f"seg_{os.path.basename(image) if isinstance(image, str) else 'cam.png'}")
             sam_results[0].save(seg_output_filename)
             print('FastSAM results:')
             print(f"Segmentation result saved to {seg_output_filename}")
@@ -148,7 +152,7 @@ class YOLOSegmentator:
 
         return result_dict
 
-    def detect_and_segment(self, image_path, categories, output_dir="result", conf=0.1, imgsz=640, save_result=True):
+    def detect_and_segment(self, image, categories, output_dir="../result", conf=0.1, imgsz=640, save_result=True):
         """
         先用 YOLO-World 检测，然后用 FastSAM 分割置信度最高的目标。
         **只分割全局置信度最高的1个物体
@@ -157,7 +161,7 @@ class YOLOSegmentator:
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
         # 步骤1: 检测
-        det_result = self.detect(image_path, categories, output_dir, conf, imgsz)
+        det_result = self.detect(image, categories, output_dir, conf, imgsz)
         
         if not det_result['success']:
             return det_result
@@ -181,7 +185,7 @@ class YOLOSegmentator:
         print(f"\nBest object: {best_class_name} (confidence: {best_confidence:.2f})")
 
         # 步骤2: 分割
-        seg_result = self.segment(image_path, best_box_gpu, output_dir, save_result=save_result)
+        seg_result = self.segment(image, best_box_gpu, output_dir, save_result=save_result)
 
         return {
             'success': True,
@@ -195,7 +199,7 @@ class YOLOSegmentator:
             'segmentation_path': seg_result.get('segmentation_path') if save_result else None
         }
     
-    def detect_and_segment_all(self, image_path, categories, output_dir="result", conf=0.1, imgsz=640,save_result=True):
+    def detect_and_segment_all(self, image, categories, output_dir="../result", conf=0.1, imgsz=640,save_result=True):
         """
         检测并分割所有指定类别的物体（每个类别只保留置信度最高的）
         (使用 detect 和 segment 函数实现)
@@ -218,7 +222,7 @@ class YOLOSegmentator:
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
         # 步骤1: 检测
-        det_result = self.detect(image_path, categories, output_dir, conf, imgsz)
+        det_result = self.detect(image, categories, output_dir, conf, imgsz)
         
         if not det_result['success']:
             return det_result
@@ -250,7 +254,7 @@ class YOLOSegmentator:
                 'class': class_name,
                 'confidence': info['confidence'],
                 'bbox_xyxy': det_bboxes.xyxy[info['idx']].cpu().numpy().astype(int).tolist(),
-                'mask': self.segment(image_path, det_bboxes.xyxy[info['idx']], output_dir, save_result=save_result)['mask']
+                'mask': self.segment(image, det_bboxes.xyxy[info['idx']], output_dir, save_result=save_result)['mask']
             }
             for class_name, info in best_per_class.items()
         ]
@@ -274,6 +278,6 @@ if __name__ == "__main__":
 
     # --- 执行检测和分割 ---
     result = segmentator.detect_and_segment(
-        image_path=image_to_process,
+        image=image_to_process,
         categories=categories_to_find
     )

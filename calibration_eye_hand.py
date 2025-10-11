@@ -307,20 +307,22 @@ if __name__ == "__main__":
         # ---- 初始化相机 ----
         print("正在初始化RealSense相机...")
         # 假设你已经将 `Camera` 类代码放在了名为 realsense_camera.py 的文件中
-        cam = Camera(camera_model='d435i') 
+        cam = Camera(camera_model='d435') 
         print("相机连接成功。")
 
         print("正在连接机器人...")
         robot_ip = "192.168.1.6"
         robot = Robot(robot_ip)
         if robot.connect():
-            robot.enable()
+            try:
+                robot.enable()
+            except Exception as e:
+                print(e,'connect fail')
             print("机器人连接并启用成功。")
         else:
             print("机器人连接失败，请检查连接。")
             robot = None
         
-
         
         # 自动获取相机内参
         CAMERA_MATRIX = cam.get_camera_matrix('color')

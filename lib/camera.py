@@ -15,8 +15,8 @@ from typing import Tuple, Optional, Dict, List
 # 预定义各型号相机的最佳配置
 CAMERA_CONFIGS = {
     'D435': {
-        'color': {'width': 1280, 'height': 720, 'fps': 30, 'format': rs.format.bgr8},
-        'depth': {'width': 1280, 'height': 720, 'fps': 30, 'format': rs.format.z16},
+        'color': {'width': 640, 'height': 480, 'fps': 30, 'format': rs.format.bgr8},
+        'depth': {'width': 640, 'height': 480, 'fps': 30, 'format': rs.format.z16},
         'description': 'Intel RealSense D435'
     },
     'D435I': {
@@ -118,6 +118,8 @@ class Camera:
         self.config = None
         self.align = None
         self.profile = None
+        # 管理 pipeline 启动状态，防止在未启动时调用 stop()
+        self._pipeline_started = False
 
         # 相机信息
         self.device_info = {}
@@ -246,7 +248,17 @@ class Camera:
                 )
 
             # 启动 pipeline
-            self.profile = self.pipeline.start(self.config)
+            try:
+                self.profile = self.pipeline.start(self.config)
+                self._pipeline_started = True
+            except Exception as start_exc:
+                # 如果启动失败，给出更有帮助的错误提示，并确保不在析构时错误调用 stop()
+                msg = str(start_exc)
+                hint = (
+                    "Couldn't start RealSense pipeline. 原因示例: 设备未连接/权限问题、librealsense 或 pyrealsense2 安装不正确，"
+                    "或请求的分辨率/帧率不被设备支持。"
+                )
+                raise RuntimeError(f"相机初始化失败: {msg}. 建议: {hint}") from start_exc
 
             # 创建对齐对象（将深度对齐到彩色）
             if self.align_to_color and self.enable_depth and self.enable_color:
@@ -273,8 +285,12 @@ class Camera:
             if self.depth_scale:
                 print(f"  深度比例: {self.depth_scale:.6f}")
 
+        except RuntimeError:
+            # 重新抛出已包装的错误，避免双重包装
+            raise
         except Exception as e:
-            raise RuntimeError(f"相机初始化失败: {str(e)}")
+            # 只包装非RuntimeError的其他异常
+            raise RuntimeError(f"相机初始化失败: {str(e)}") from e
 
     def _get_device_info(self):
         """获取设备信息"""
@@ -330,8 +346,16 @@ class Camera:
         参数:
             frames: 跳过的帧数，默认 30
         """
+        # 仅在 pipeline 已成功启动时进行预热
+        if not getattr(self, '_pipeline_started', False) or self.pipeline is None:
+            return
+
         for _ in range(frames):
-            self.pipeline.wait_for_frames()
+            try:
+                self.pipeline.wait_for_frames()
+            except Exception:
+                # 预热过程中出现任何问题则中止预热
+                break
 
     def get_frames(self, aligned: bool = True) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         """
@@ -346,6 +370,11 @@ class Camera:
             - depth_image: 深度图像 (H, W)，单位为毫米
             - 如果未启用对应流，则返回 None
         """
+        # 在 pipeline 未启动时安全返回 None
+        if not getattr(self, '_pipeline_started', False) or self.pipeline is None:
+            print("获取帧失败: 相机 pipeline 未启动")
+            return None, None
+
         try:
             # 等待新的一帧
             frames = self.pipeline.wait_for_frames()
@@ -552,9 +581,15 @@ class Camera:
 
     def release(self):
         """释放相机资源"""
-        if self.pipeline:
-            self.pipeline.stop()
-            print("✓ 相机资源已释放")
+        # 仅在 pipeline 已经启动时调用 stop()
+        if self.pipeline and getattr(self, '_pipeline_started', False):
+            try:
+                self.pipeline.stop()
+                print("✓ 相机资源已释放")
+            except Exception as e:
+                print(f"警告: 停止 pipeline 时出错: {e}")
+            finally:
+                self._pipeline_started = False
 
     def __enter__(self):
         """上下文管理器入口"""
@@ -568,123 +603,5 @@ class Camera:
         """析构函数"""
         self.release()
 
-    @staticmethod
-    def list_devices() -> List[Dict]:
-        """
-        列出所有连接的 RealSense 设备
-
-        返回:
-            设备信息列表
-        """
-        ctx = rs.context()
-        devices = ctx.query_devices()
-
-        device_list = []
-        for i, device in enumerate(devices):
-            device_info = {
-                'index': i,
-                'name': device.get_info(rs.camera_info.name),
-                'serial_number': device.get_info(rs.camera_info.serial_number),
-                'firmware_version': device.get_info(rs.camera_info.firmware_version),
-                'product_id': device.get_info(rs.camera_info.product_id),
-            }
-            device_list.append(device_info)
-
-        return device_list
-
-    @staticmethod
-    def print_devices():
-        """打印所有连接的 RealSense 设备"""
-        devices = Camera.list_devices()
-
-        if not devices:
-            print("未检测到 RealSense 设备")
-            return
-
-        print(f"\n检测到 {len(devices)} 个 RealSense 设备:")
-        print("=" * 80)
-        for dev in devices:
-            print(f"设备 {dev['index']}:")
-            print(f"  名称: {dev['name']}")
-            print(f"  序列号: {dev['serial_number']}")
-            print(f"  固件版本: {dev['firmware_version']}")
-            print(f"  产品 ID: {dev['product_id']}")
-            print("-" * 80)
-
-
 if __name__ == "__main__":
-    # 测试代码
-    print("RealSense Camera Class Test")
-    print("=" * 80)
-
-    # 列出所有设备
-    Camera.print_devices()
-
-    print("\n" + "=" * 80)
-    print("测试用例:")
-    print("=" * 80)
-
-    # 测试 1: 自动检测型号
-    try:
-        print("\n[测试 1] 自动检测相机型号")
-        print("-" * 80)
-        with Camera(camera_model='AUTO') as cam:
-            print(f"✓ 检测到型号: {cam.camera_model}")
-            print(f"✓ 配置: {cam.width}x{cam.height}@{cam.fps}fps")
-            
-            # 捕获图像
-            color_image, depth_image = cam.get_frames()
-            if color_image is not None:
-                print(f"✓ 彩色图像尺寸: {color_image.shape}")
-                cv2.imshow("Auto - Color", color_image)
-            
-            if depth_image is not None:
-                depth_colormap = cam.get_depth_colormap(depth_image)
-                cv2.imshow("Auto - Depth", depth_colormap)
-            
-            print("按任意键继续...")
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
-            
-    except Exception as e:
-        print(f"✗ 测试 1 失败: {e}")
-
-    # 测试 2: 指定型号
-    try:
-        print("\n[测试 2] 指定相机型号 (D435)")
-        print("-" * 80)
-        with Camera(camera_model='D435') as cam:
-            print(f"✓ 使用型号: {cam.camera_model}")
-            print(f"✓ 配置: {cam.width}x{cam.height}@{cam.fps}fps")
-            
-            # 捕获并保存
-            paths = cam.capture(save_dir="test_images", prefix="d435")
-            print(f"✓ 已保存文件:")
-            for key, path in paths.items():
-                print(f"    {key}: {path}")
-                
-    except Exception as e:
-        print(f"✗ 测试 2 失败: {e}")
-
-    # 测试 3: 自定义配置
-    try:
-        print("\n[测试 3] 使用自定义配置")
-        print("-" * 80)
-        custom = {
-            'color': {'width': 1920, 'height': 1080, 'fps': 30},
-            'depth': {'width': 1280, 'height': 720, 'fps': 30}
-        }
-        with Camera(camera_model='AUTO', custom_config=custom) as cam:
-            print(f"✓ 型号: {cam.camera_model}")
-            print(f"✓ 自定义配置: {cam.width}x{cam.height}@{cam.fps}fps")
-            
-            color_image = cam.get_color_image()
-            if color_image is not None:
-                print(f"✓ 实际图像尺寸: {color_image.shape}")
-                
-    except Exception as e:
-        print(f"✗ 测试 3 失败: {e}")
-
-    print("\n" + "=" * 80)
-    print("所有测试完成")
-    print("=" * 80)
+    print("RealSense")

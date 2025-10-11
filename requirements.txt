@@ -12,3 +12,7 @@ torchvision>=0.11.0
 pillow>=8.0.0
 matplotlib>=3.3.0
 
+DobotApi
+
+
+open3d

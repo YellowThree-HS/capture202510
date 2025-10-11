@@ -42,22 +42,7 @@ def main():
     
     # 初始化相机
     try:
-        cam = Camera(width=640, height=480, fps=30)
-        # 获取相机内参
-        intrinsics_dict = cam.get_intrinsics_dict()
-        if 'color' in intrinsics_dict:
-            intr = intrinsics_dict['color']
-            intr_matrix = np.array([
-                [intr['fx'], 0, intr['ppx']],
-                [0, intr['fy'], intr['ppy']],
-                [0, 0, 1]
-            ])
-            print(f"\n相机内参已获取:")
-            print(f"  fx: {intr['fx']:.2f}, fy: {intr['fy']:.2f}")
-            print(f"  cx: {intr['ppx']:.2f}, cy: {intr['ppy']:.2f}")
-        else:
-            print("⚠️ 无法获取相机内参，使用默认值")
-            intr_matrix = np.array([[615, 0, 320], [0, 615, 240], [0, 0, 1]])
+        cam = Camera(camera_model='D435')
     except Exception as e:
         print(f"相机初始化失败: {e}")
         print("请确保D435相机已正确连接")
@@ -113,7 +98,7 @@ def main():
                             last_detection_data['color'],
                             last_detection_data['depth'],
                             T_cam2base,
-                            intr_matrix,
+                            cam.get_camera_matrix(),
                             last_detection_data['pose']
                         )
                     elif 'poses' in last_detection_data:
@@ -123,7 +108,7 @@ def main():
                             last_detection_data['color'],
                             last_detection_data['depth'],
                             T_cam2base,
-                            intr_matrix,
+                            cam.get_camera_matrix(),
                             last_detection_data['poses']
                         )
                 else:
@@ -183,7 +168,7 @@ def main():
                                     mask=obj['mask'],
                                     depth_image=depth_image_meters,
                                     color_image=color_image,
-                                    intrinsics=intr_matrix,
+                                    intrinsics=cam.get_camera_matrix(),
                                     T_cam2base=T_cam2base,
                                     object_class=obj['class']  # 传入物体类别
                                 )

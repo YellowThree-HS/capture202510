@@ -1,7 +1,42 @@
 [project]
-name = "capture"
+name = "capture202510"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
-requires-python = ">=3.10"
-dependencies = []
+description = "RealSense camera with YOLO-World and FastSAM"
+requires-python = ">=3.8"
+
+dependencies = [
+    "pip",
+    "setuptools",
+
+    "open3d",
+    "pyrealsense2>=2.50.0",
+    "opencv-python>=4.5.0",
+    "numpy>=1.19.0",
+    "ultralytics>=8.0.0",
+
+    "torch>=1.10.0",
+    "torchvision>=0.11.0",
+
+    "pillow>=8.0.0",
+    "matplotlib>=3.3.0"
+]
+
+[build-system]
+requires = ["setuptools>=65.0"]
+build-backend = "setuptools.build_meta"
+
+
+
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu121", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu121", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true

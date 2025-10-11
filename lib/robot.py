@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.spatial.transform import Rotation
 import re
-import DobotApi
+import dobot_api as DobotApi
 import time
 
 class Robot:
@@ -9,17 +9,16 @@ class Robot:
     一个更高级的 Dobot 机械臂控制类，封装了底层的 DobotApi。
     提供了更简洁的接口和状态管理。
     """
-    def __init__(self, ip="192.168.1.6", control_port=29999, feedback_port=30003):
+    def __init__(self, ip="192.168.1.6", dashboard_port=29999, feedback_port=30004):
         """
         初始化机器人对象。
         :param ip: 机械臂的 IP 地址。
-        :param control_port: 控制端口。
+        :param dashboard_port: 控制面板端口。
         :param feedback_port: 反馈端口。
         """
         self.ip = ip
-        self.control_port = control_port
+        self.dashboard_port = dashboard_port
         self.feedback_port = feedback_port
-        self.api = None
         self.connected = False
         self.enabled = False
 
@@ -32,11 +31,18 @@ class Robot:
             print("机器人已连接。")
             return True
         try:
-            self.api = DobotApi.DobotApi(self.ip, self.control_port, self.feedback_port)
+            # 只创建控制面板连接，避免重复连接和参数错误
+            self.dashboard = DobotApi.DobotApiDashboard(self.ip, self.dashboard_port)
+            print(f"成功连接到机器人 {self.ip}:{self.dashboard_port}")
+            
             self.connected = True
-            print(f"成功连接到机器人 {self.ip}")
+            
             # 连接后建议清除一下错误状态
-            self.clear_alarms()
+            try:
+                self.clear_alarms()
+            except Exception as clear_error:
+                print(f"清除报警失败（非关键错误）: {clear_error}")
+
             return True
         except Exception as e:
             print(f"连接失败: {e}")
@@ -47,10 +53,18 @@ class Robot:
         """
         断开与机器人的连接。
         """
-        if self.api and self.connected:
+        if self.connected:
             if self.enabled:
                 self.disable() # 断开前先禁用机器人
-            self.api.close()
+            
+            # 关闭连接
+            if self.dashboard:
+                try:
+                    self.dashboard.close()
+                except:
+                    pass
+                self.dashboard = None
+                
             self.connected = False
             self.enabled = False
             print("与机器人的连接已关闭。")
@@ -61,11 +75,20 @@ class Robot:
         """
         if not self.connected:
             raise ConnectionError("机器人未连接，请先调用 connect()。")
-        self.api.EnableRobot()
-        # 等待一小段时间确保机器人状态切换完成
-        time.sleep(0.5)
-        self.enabled = True
-        print("机器人已启用。")
+        
+        try:
+            # 调用 EnableRobot 时不传入参数，使用默认值
+            result = self.dashboard.EnableRobot()
+            print(f"EnableRobot 返回: {result}")
+            
+            # 等待一小段时间确保机器人状态切换完成
+            time.sleep(0.5)
+            self.enabled = True
+            print("机器人已启用。")
+            return True
+        except Exception as e:
+            print(f"启用机器人失败: {e}")
+            return False
 
     def disable(self):
         """
@@ -73,9 +96,16 @@ class Robot:
         """
         if not self.connected:
             raise ConnectionError("机器人未连接，请先调用 connect()。")
-        self.api.DisableRobot()
-        self.enabled = False
-        print("机器人已禁用。")
+        
+        try:
+            result = self.dashboard.DisableRobot()
+            print(f"DisableRobot 返回: {result}")
+            self.enabled = False
+            print("机器人已禁用。")
+            return True
+        except Exception as e:
+            print(f"禁用机器人失败: {e}")
+            return False
 
     def home(self):
         """
@@ -83,42 +113,59 @@ class Robot:
         """
         if not self.enabled:
             raise RuntimeError("机器人未启用，请先调用 enable()。")
-        # Home 指令的格式，具体参数可能依赖于型号，(0)通常是默认选项
-        self.api.send_data("Home(0)") 
-        print("正在执行归零操作...")
-        # 归零操作需要较长时间，这里仅发送指令
-        # 在实际应用中可能需要轮询状态直到操作完成
+        
+        try:
+            # 使用 sendRecvMsg 方法发送 Home 指令
+            result = self.dashboard.sendRecvMsg("Home(0)")
+            print("正在执行归零操作...")
+            print(f"Home 指令返回: {result}")
+            return True
+        except Exception as e:
+            print(f"归零操作失败: {e}")
+            return False
 
     def clear_alarms(self):
         """
         清除机器人的报警状态。
         """
-        if not self.connected:
+        if not self.connected or not self.dashboard:
             raise ConnectionError("机器人未连接，请先调用 connect()。")
-        self.api.ClearError()
-        print("尝试清除报警状态。")
+        
+        try:
+            result = self.dashboard.ClearError()
+            print(f"清除报警返回: {result}")
+            print("尝试清除报警状态。")
+            return True
+        except Exception as e:
+            print(f"清除报警失败: {e}")
+            return False
         
     def get_alarms(self):
         """
         获取并返回当前机械臂的报警信息列表。
         :return: list or None, 报警信息字符串列表，如果没有报警则返回空列表。
         """
-        if not self.connected:
+        if not self.connected or not self.dashboard:
             raise ConnectionError("机器人未连接，请先调用 connect()。")
-        alarm_str = self.api.GetErrorID()
-        # 例子: {0,0,[[1,[]],[2,[]],...]} or {1,0,[[1,[[id,level,type,'description']]],...]}
-        if "[[1,[]]" in alarm_str: # 简单判断没有报警
-            print("当前无报警。")
+            
+        try:
+            alarm_str = self.dashboard.GetErrorID()
+            # 例子: {0,0,[[1,[]],[2,[]],...]} or {1,0,[[1,[[id,level,type,'description']]],...]}
+            if "[[1,[]]" in alarm_str: # 简单判断没有报警
+                print("当前无报警。")
+                return []
+            
+            # 使用正则表达式解析报警信息
+            alarms = re.findall(r"\[(\d+),(\d+),(\d+),'(.*?)'\]", alarm_str)
+            if not alarms:
+                return []
+            
+            alarm_list = [f"ID:{a[0]}, Level:{a[1]}, Type:{a[2]}, Desc:'{a[3]}'" for a in alarms]
+            print("检测到报警:", alarm_list)
+            return alarm_list
+        except Exception as e:
+            print(f"获取报警信息失败: {e}")
             return []
-        
-        # 使用正则表达式解析报警信息
-        alarms = re.findall(r"\[(\d+),(\d+),(\d+),'(.*?)'\]", alarm_str)
-        if not alarms:
-            return []
-        
-        alarm_list = [f"ID:{a[0]}, Level:{a[1]}, Type:{a[2]}, Desc:'{a[3]}'" for a in alarms]
-        print("检测到报警:", alarm_list)
-        return alarm_list
 
     def move_to(self, x, y, z, r, mode='joint'):
         """
@@ -130,12 +177,21 @@ class Robot:
             raise RuntimeError("机器人未启用，请先调用 enable()。")
         
         print(f"准备以 {mode} 模式移动到: ({x}, {y}, {z}, {r})")
-        if mode.lower() == 'joint':
-            self.api.MovJ(x, y, z, r)
-        elif mode.lower() == 'linear':
-            self.api.MovL(x, y, z, r)
-        else:
-            raise ValueError("无效的移动模式。请选择 'joint' 或 'linear'。")
+        try:
+            if mode.lower() == 'joint':
+                # MovJ 需要坐标模式参数，1表示笛卡尔坐标系
+                result = self.dashboard.MovJ(x, y, z, r, 0, 0, 1)
+                print(f"MovJ 返回: {result}")
+            elif mode.lower() == 'linear':
+                # MovL 需要坐标模式参数，1表示笛卡尔坐标系
+                result = self.dashboard.MovL(x, y, z, r, 0, 0, 1)
+                print(f"MovL 返回: {result}")
+            else:
+                raise ValueError("无效的移动模式。请选择 'joint' 或 'linear'。")
+            return True
+        except Exception as e:
+            print(f"移动失败: {e}")
+            return False
         # 同样，移动需要时间，这里只发送指令
 
     def get_pose(self):
@@ -147,8 +203,8 @@ class Robot:
         if not self.connected:
             raise ConnectionError("机器人未连接，请先调用 connect()。")
             
-        pose_str = self.api.GetPose()
-        match = re.search(r'\{0,([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+)', pose_str)
+        pose_str = self.dashboard.GetPose()
+        match = re.search(r'\{([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+)\}', pose_str)
         if not match:
             print("错误: 无法解析位姿字符串。")
             return None
