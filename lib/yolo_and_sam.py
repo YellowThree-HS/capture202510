@@ -3,6 +3,7 @@ from ultralytics import YOLOWorld, FastSAM
 import numpy as np
 import time
 import os
+import cv2
 from PIL import Image
 from functools import wraps
 
@@ -300,11 +301,120 @@ class YOLOSegmentator:
         
         print(f"\nTotal objects processed: {len(detected_objects)}")
         
+        # 步骤4: 创建合并的可视化图像（检测框 + 分割掩码）
+        combined_path = None
+        if save_result and len(detected_objects) > 0:
+            combined_path = self._create_combined_visualization(
+                image, detected_objects, output_dir
+            )
+        
         return {
             'success': True,
             'objects': detected_objects,
-            'detection_path': det_result['detection_path']
+            'detection_path': det_result['detection_path'],
+            'combined_path': combined_path
         }
+    
+    def _create_combined_visualization(self, image, objects, output_dir):
+        """
+        创建合并的可视化图像（检测框 + 分割掩码）
+        
+        参数:
+            image: 图像路径或数组
+            objects: 检测到的物体列表
+            output_dir: 输出目录
+        
+        返回:
+            combined_path: 合并图像的保存路径
+        """
+        # 读取原始图像
+        if isinstance(image, str):
+            img = cv2.imread(image)
+        elif isinstance(image, np.ndarray):
+            img = image.copy()
+        else:
+            img = np.array(image)
+        
+        if len(img.shape) == 2:  # 灰度图
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        
+        # 创建掩码叠加层
+        overlay = img.copy()
+        
+        # 为不同物体定义颜色（BGR格式）
+        colors = [
+            (255, 0, 0),      # 蓝色
+            (0, 255, 0),      # 绿色
+            (0, 0, 255),      # 红色
+            (255, 255, 0),    # 青色
+            (255, 0, 255),    # 紫色
+            (0, 255, 255),    # 黄色
+            (128, 0, 255),    # 粉色
+            (0, 128, 255),    # 橙色
+        ]
+        
+        for idx, obj in enumerate(objects):
+            color = colors[idx % len(colors)]
+            
+            # 1. 绘制分割掩码（半透明填充）
+            if obj['mask'] is not None:
+                mask = obj['mask']
+                if mask.shape[:2] != img.shape[:2]:
+                    # 如果掩码尺寸不匹配，调整大小
+                    mask = cv2.resize(mask.astype(np.uint8), 
+                                     (img.shape[1], img.shape[0]), 
+                                     interpolation=cv2.INTER_NEAREST)
+                
+                # 创建彩色掩码
+                colored_mask = np.zeros_like(img)
+                colored_mask[mask > 0] = color
+                
+                # 叠加掩码（透明度0.4）
+                overlay = cv2.addWeighted(overlay, 1, colored_mask, 0.4, 0)
+            
+            # 2. 绘制检测框
+            bbox = obj['bbox_xyxy']
+            x1, y1, x2, y2 = map(int, bbox)
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), color, 2)
+            
+            # 3. 绘制标签背景
+            label = f"{obj['class']} {obj['confidence']:.2f}"
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.6
+            thickness = 2
+            (text_width, text_height), baseline = cv2.getTextSize(
+                label, font, font_scale, thickness
+            )
+            
+            # 标签背景框
+            cv2.rectangle(
+                overlay,
+                (x1, y1 - text_height - baseline - 5),
+                (x1 + text_width + 5, y1),
+                color,
+                -1  # 填充
+            )
+            
+            # 4. 绘制标签文字（白色）
+            cv2.putText(
+                overlay,
+                label,
+                (x1 + 2, y1 - baseline - 2),
+                font,
+                font_scale,
+                (255, 255, 255),  # 白色
+                thickness
+            )
+        
+        # 保存合并图像
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        combined_filename = f"combined_{timestamp}.jpg"
+        combined_path = os.path.join(output_dir, combined_filename)
+        cv2.imwrite(combined_path, overlay)
+        
+        print(f"\n💾 合并可视化已保存: {combined_path}")
+        
+        return combined_path
 
 if __name__ == "__main__":
         # 你的图片路径 (请确保图片存在)

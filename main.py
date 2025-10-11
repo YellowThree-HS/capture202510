@@ -153,10 +153,12 @@ def main():
                     print(f"\n✓ 检测成功! 共检测到 {num_objects} 个物体 (耗时: {end_time - start_time:.2f}s)")
                     print(f"  检测结果: {result['detection_path']}")
                     
-                    # 显示检测结果图像
-                    det_img = cv2.imread(result['detection_path'])
-                    if det_img is not None:
-                        cv2.imshow("Detection Result", det_img)
+                    # 显示合并的可视化图像（检测框 + 分割掩码）
+                    if 'combined_path' in result and result['combined_path']:
+                        print(f"  合并可视化: {result['combined_path']}")
+                        combined_img = cv2.imread(result['combined_path'])
+                        if combined_img is not None:
+                            cv2.imshow("Detection + Segmentation", combined_img)
                     
                     # 为每个物体计算位姿
                     if depth_image_meters is not None:
