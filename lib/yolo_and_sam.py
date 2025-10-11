@@ -152,7 +152,7 @@ class YOLOSegmentator:
 
         return result_dict
 
-    def detect_and_segment(self, image, categories, output_dir="../result", conf=0.1, imgsz=640, save_result=True):
+    def detect_and_segment(self, image, categories, output_dir="./result", conf=0.1, imgsz=640, save_result=True):
         """
         先用 YOLO-World 检测，然后用 FastSAM 分割置信度最高的目标。
         **只分割全局置信度最高的1个物体
@@ -199,7 +199,7 @@ class YOLOSegmentator:
             'segmentation_path': seg_result.get('segmentation_path') if save_result else None
         }
     
-    def detect_and_segment_all(self, image, categories, output_dir="../result", conf=0.1, imgsz=640,save_result=True):
+    def detect_and_segment_all(self, image, categories, output_dir="./result", conf=0.1, imgsz=640,save_result=True):
         """
         检测并分割所有指定类别的物体（每个类别只保留置信度最高的）
         (使用 detect 和 segment 函数实现)
