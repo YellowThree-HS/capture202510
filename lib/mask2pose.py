@@ -110,6 +110,103 @@ def extract_cup_features(point_cloud):
         return None, None, None
 
 
+def vector_to_euler(direction_vector):
+    """
+    将方向向量转换为欧拉角（roll, pitch, yaw）
+    
+    参数:
+        direction_vector: 方向向量 (3,)
+    
+    返回:
+        roll, pitch, yaw (度)
+    """
+    # 归一化
+    v = direction_vector / np.linalg.norm(direction_vector)
+    
+    # 计算pitch和yaw
+    pitch = np.arcsin(-v[2])  # 俯仰角
+    yaw = np.arctan2(v[1], v[0])  # 偏航角
+    roll = 0  # 对于单个向量，roll角度无法唯一确定，设为0
+    
+    # 转换为度
+    return np.degrees(roll), np.degrees(pitch), np.degrees(yaw)
+
+
+def extract_spoon_head_center(point_cloud, main_axis, centroid, head_ratio=0.40):
+    """
+    识别勺子圆头中心的位置和勺柄姿态
+    
+    参数:
+        point_cloud: 勺子的点云数据
+        main_axis: 主轴方向（已经指向勺头）
+        centroid: 点云质心
+        head_ratio: 勺头占整体长度的比例（默认0.40，即前40%）
+    
+    返回:
+        head_center: 勺头圆形中心位置 (x, y, z)
+        head_radius: 勺头半径估计
+        handle_direction: 勺柄方向向量（从勺柄指向勺头）
+        handle_pose: 勺柄姿态 [roll, pitch, yaw] (度)
+    """
+    try:
+        points = np.asarray(point_cloud.points)
+        
+        # 1. 将点云投影到主轴上
+        centered_points = points - centroid
+        projections = centered_points @ main_axis
+        
+        # 2. 找到投影的最大值（勺头端）
+        max_proj = np.max(projections)
+        min_proj = np.min(projections)
+        length = max_proj - min_proj
+        
+        # 3. 确定勺头区域的阈值（前端部分）
+        head_threshold = max_proj - length * head_ratio
+        
+        # 4. 提取勺头区域的点云
+        head_mask = projections >= head_threshold
+        head_points = points[head_mask]
+        
+        if len(head_points) < 10:
+            print("⚠️ 勺头点云数据太少")
+            return None, None
+        
+        # 5. 计算勺头中心（勺头区域点云的质心）
+        head_center = np.mean(head_points, axis=0)
+        
+        # 6. 估计勺头半径（在垂直于主轴的平面上）
+        # 将勺头点投影到垂直于主轴的平面上
+        head_centered = head_points - head_center
+        # 去除主轴方向的分量
+        perpendicular_components = head_centered - (head_centered @ main_axis)[:, np.newaxis] * main_axis
+        # 计算垂直距离
+        perpendicular_distances = np.linalg.norm(perpendicular_components, axis=1)
+        head_radius = np.mean(perpendicular_distances)
+        
+        # 7. 计算勺柄方向和姿态
+        # 勺柄方向就是主轴方向（从勺柄指向勺头）
+        handle_direction = main_axis
+        
+        # 将勺柄方向转换为欧拉角
+        handle_roll, handle_pitch, handle_yaw = vector_to_euler(handle_direction)
+        handle_pose = [handle_roll, handle_pitch, handle_yaw]
+        
+        print(f"🥄 勺子特征提取:")
+        print(f"   勺头中心: [{head_center[0]:.3f}, {head_center[1]:.3f}, {head_center[2]:.3f}]")
+        print(f"   勺头半径: {head_radius:.3f}m ({head_radius*100:.1f}cm)")
+        print(f"   勺头点数: {len(head_points)} / {len(points)} ({len(head_points)/len(points)*100:.1f}%)")
+        print(f"   勺柄方向: [{handle_direction[0]:.3f}, {handle_direction[1]:.3f}, {handle_direction[2]:.3f}]")
+        print(f"   勺柄姿态: [roll={handle_roll:.1f}°, pitch={handle_pitch:.1f}°, yaw={handle_yaw:.1f}°]")
+        
+        return head_center, head_radius, handle_direction, handle_pose
+        
+    except Exception as e:
+        print(f"❌ 提取勺头特征时出错: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None, None, None
+
+
 def extract_elongated_features(point_cloud):
     """
     使用PCA提取细长物体（如勺子）的几何特征
@@ -382,6 +479,23 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
             if center is None:
                 return None, None
             
+            # 如果是勺子，额外提取勺头中心和勺柄姿态
+            extra_info = {}
+            if object_class.lower() == 'spoon':
+                # 获取质心用于勺头提取
+                points = np.asarray(point_cloud.points)
+                centroid = np.mean(points, axis=0)
+                
+                head_center, head_radius, handle_direction, handle_pose = extract_spoon_head_center(
+                    point_cloud, main_axis, centroid, head_ratio=0.30
+                )
+                
+                if head_center is not None:
+                    extra_info['spoon_head_center'] = head_center
+                    extra_info['spoon_head_radius'] = head_radius
+                    extra_info['handle_direction'] = handle_direction
+                    extra_info['handle_pose'] = handle_pose  # [roll, pitch, yaw]
+            
             # 计算位姿变换矩阵
             T = calculate_elongated_pose(center, main_axis, secondary_axis)
             
@@ -391,6 +505,11 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
             print(f"✅ {object_class}位姿估计成功:")
             print(f"   位置: [{pose[0]:.3f}, {pose[1]:.3f}, {pose[2]:.3f}]")
             print(f"   姿态: [{pose[3]:.1f}°, {pose[4]:.1f}°, {pose[5]:.1f}°]")
+            
+            # 如果有勺头信息，添加到pose中
+            if extra_info:
+                pose = list(pose)  # 转换为列表以便添加额外信息
+                pose.append(extra_info)  # 将额外信息作为第7个元素
             
         else:
             print(f"🔲 检测到平面物体 '{object_class}'，使用平面检测法")
@@ -428,7 +547,7 @@ def visualize_result(color_image, depth_image, T_cam2base, intrinsics, pose):
         depth_image: 深度图像
         T_cam2base: 相机到基坐标系的变换
         intrinsics: 相机内参
-        pose: 物体位姿 [x, y, z, roll, pitch, yaw]
+        pose: 物体位姿 [x, y, z, roll, pitch, yaw] 或包含额外信息的列表
     """
     try:
         # 创建完整点云
@@ -439,14 +558,32 @@ def visualize_result(color_image, depth_image, T_cam2base, intrinsics, pose):
         # 创建坐标系
         pose_matrix = np.eye(4)
         pose_matrix[:3, 3] = pose[:3]
-        r = R.from_euler('xyz', pose[3:], degrees=True)
+        # 只使用前6个元素的后3个（roll, pitch, yaw）
+        r = R.from_euler('xyz', pose[3:6], degrees=True)
         pose_matrix[:3, :3] = r.as_matrix()
         
         coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
         coordinate_frame.transform(pose_matrix)
         
+        geometries = [pcd, coordinate_frame]
+        
+        # 检查是否有勺头中心信息
+        if isinstance(pose, list) and len(pose) > 6 and isinstance(pose[6], dict):
+            extra_info = pose[6]
+            if 'spoon_head_center' in extra_info:
+                head_center = extra_info['spoon_head_center']
+                head_radius = extra_info['spoon_head_radius']
+                
+                # 创建球体标记勺头中心（橙色）
+                sphere = o3d.geometry.TriangleMesh.create_sphere(radius=head_radius * 0.5)
+                sphere.translate(head_center)
+                sphere.paint_uniform_color([1.0, 0.5, 0.0])  # 橙色
+                geometries.append(sphere)
+                
+                print(f"🥄 勺头中心标记: 橙色球体")
+        
         # 可视化
-        o3d.visualization.draw_geometries([pcd, coordinate_frame])
+        o3d.visualization.draw_geometries(geometries)
         
     except Exception as e:
         print(f"⚠️ 可视化失败: {e}")
@@ -462,7 +599,7 @@ def visualize_multi_objects(color_image, depth_image, T_cam2base, intrinsics, po
         T_cam2base: 相机到基坐标系的变换
         intrinsics: 相机内参
         poses_info: 物体位姿信息列表 [
-            {'class': str, 'pose': [x, y, z, roll, pitch, yaw], 'confidence': float},
+            {'class': str, 'pose': [x, y, z, roll, pitch, yaw], 'confidence': float, 'extra_info': dict},
             ...
         ]
     """
@@ -494,7 +631,8 @@ def visualize_multi_objects(color_image, depth_image, T_cam2base, intrinsics, po
             # 创建位姿变换矩阵
             pose_matrix = np.eye(4)
             pose_matrix[:3, 3] = pose[:3]
-            r = R.from_euler('xyz', pose[3:], degrees=True)
+            # 只使用前6个元素的后3个（roll, pitch, yaw）
+            r = R.from_euler('xyz', pose[3:6], degrees=True)
             pose_matrix[:3, :3] = r.as_matrix()
             
             # 创建坐标系（大小根据物体索引略有变化）
@@ -507,6 +645,21 @@ def visualize_multi_objects(color_image, depth_image, T_cam2base, intrinsics, po
             geometries.append(coordinate_frame)
             
             print(f"  {idx+1}. {obj_class}: 坐标系大小 {0.08 + idx * 0.02:.2f}m")
+            
+            # 如果有勺头中心信息，创建橙色球体标记
+            if 'extra_info' in pose_info and pose_info['extra_info']:
+                extra = pose_info['extra_info']
+                if 'spoon_head_center' in extra:
+                    head_center = extra['spoon_head_center']
+                    head_radius = extra['spoon_head_radius']
+                    
+                    # 创建球体标记勺头中心（橙色）
+                    sphere = o3d.geometry.TriangleMesh.create_sphere(radius=head_radius * 0.5)
+                    sphere.translate(head_center)
+                    sphere.paint_uniform_color([1.0, 0.5, 0.0])  # 橙色
+                    geometries.append(sphere)
+                    
+                    print(f"       -> 勺头中心标记: 橙色球体")
         
         print("\n💡 可视化说明:")
         print("  - 白色点云: 场景")

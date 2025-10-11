@@ -132,7 +132,7 @@ def main():
                 # 执行检测和分割（所有物体）
                 start_time = time.time()
                 result = segmentator.detect_and_segment_all(
-                    image_path=temp_image_path,
+                    image=temp_image_path,
                     categories=categories_to_find
                 )
                 end_time = time.time()
@@ -179,10 +179,23 @@ def main():
                                     print(f"   📍 位置 (x, y, z): [{pose[0]:.3f}, {pose[1]:.3f}, {pose[2]:.3f}] 米")
                                     print(f"   📐 姿态 (roll, pitch, yaw): [{pose[3]:.1f}°, {pose[4]:.1f}°, {pose[5]:.1f}°]")
                                     
+                                    # 检查是否有勺子的额外信息
+                                    extra_info = None
+                                    if isinstance(pose, list) and len(pose) > 6 and isinstance(pose[6], dict):
+                                        extra_info = pose[6]
+                                        if 'spoon_head_center' in extra_info:
+                                            head_center = extra_info['spoon_head_center']
+                                            head_radius = extra_info['spoon_head_radius']
+                                            handle_pose = extra_info['handle_pose']
+                                            print(f"   🥄 勺头中心位置: [{head_center[0]:.3f}, {head_center[1]:.3f}, {head_center[2]:.3f}] 米")
+                                            print(f"   🥄 勺头半径: {head_radius:.3f}m ({head_radius*100:.1f}cm)")
+                                            print(f"   🥄 勺柄姿态: [roll={handle_pose[0]:.1f}°, pitch={handle_pose[1]:.1f}°, yaw={handle_pose[2]:.1f}°]")
+                                    
                                     all_poses.append({
                                         'class': obj['class'],
                                         'pose': pose,
-                                        'confidence': obj['confidence']
+                                        'confidence': obj['confidence'],
+                                        'extra_info': extra_info
                                     })
                                 else:
                                     print(f"   ❌ 位姿估计失败")
@@ -208,6 +221,17 @@ def main():
                                 print(f"\n  {i+1}. {pose_info['class']} (置信度: {pose_info['confidence']:.2f})")
                                 print(f"     位置: [{pose[0]:.3f}, {pose[1]:.3f}, {pose[2]:.3f}] 米")
                                 print(f"     姿态: [{pose[3]:.1f}°, {pose[4]:.1f}°, {pose[5]:.1f}°]")
+                                
+                                # 如果有额外信息（如勺头中心和勺柄姿态），也显示
+                                if 'extra_info' in pose_info and pose_info['extra_info']:
+                                    extra = pose_info['extra_info']
+                                    if 'spoon_head_center' in extra:
+                                        head_center = extra['spoon_head_center']
+                                        head_radius = extra['spoon_head_radius']
+                                        handle_pose = extra['handle_pose']
+                                        print(f"     勺头中心位置: [{head_center[0]:.3f}, {head_center[1]:.3f}, {head_center[2]:.3f}] 米")
+                                        print(f"     勺头半径: {head_radius*100:.1f}cm")
+                                        print(f"     勺柄姿态: [roll={handle_pose[0]:.1f}°, pitch={handle_pose[1]:.1f}°, yaw={handle_pose[2]:.1f}°]")
                             
                             print("\n💡 提示: 按 'v' 键可进行3D可视化")
                         else:

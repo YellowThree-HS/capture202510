@@ -113,8 +113,9 @@ result = segmentator.detect_and_segment_all(
 **主要特性:**
 - 基于点云的位姿估计
 - PCA 主成分分析计算方向
-- 多种物体类型的适配
+- 多种物体类型的适配（平面物体/细长物体）
 - 相机坐标系到机器人坐标系转换
+- **勺子圆头中心检测** - 自动识别勺头位置和半径
 
 **使用示例:**
 ```python
@@ -126,9 +127,22 @@ pose, transform = mask2pose(
     color_image=color_image,
     intrinsics=cam.intrinsics,
     T_cam2base=calibration_matrix,
-    object_class='cup'
+    object_class='spoon'  # 支持 'cup', 'spoon' 等
 )
+
+# 对于勺子，pose 包含额外信息
+# pose[6]['spoon_head_center'] = 勺头中心坐标 [x, y, z]
+# pose[6]['spoon_head_radius'] = 勺头半径
 ```
+
+#### 勺子圆头检测
+针对勺子类物体的专门功能：
+- 使用PCA确定主轴方向（指向勺头）
+- 提取勺头区域点云（前25%）
+- 计算勺头圆形中心和半径
+- 在3D可视化中用橙色球体标记勺头位置
+
+详细说明请参考：[勺子圆头检测文档](docs/SPOON_HEAD_DETECTION.md)
 
 ### 5. 物体位姿检测模块 (`lib/object_pose.py`)
 
