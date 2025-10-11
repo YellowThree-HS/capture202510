@@ -132,7 +132,7 @@ def vector_to_euler(direction_vector):
     return np.degrees(roll), np.degrees(pitch), np.degrees(yaw)
 
 
-def extract_spoon_head_center(point_cloud, main_axis, centroid, head_ratio=0.40):
+def extract_spoon_head_center(point_cloud, main_axis, centroid, head_ratio=0.50):
     """
     识别勺子圆头中心的位置和勺柄姿态
     
@@ -140,7 +140,7 @@ def extract_spoon_head_center(point_cloud, main_axis, centroid, head_ratio=0.40)
         point_cloud: 勺子的点云数据
         main_axis: 主轴方向（已经指向勺头）
         centroid: 点云质心
-        head_ratio: 勺头占整体长度的比例（默认0.40，即前40%）
+        head_ratio: 勺头占整体长度的比例（默认0.50，即前50%）
     
     返回:
         head_center: 勺头圆形中心位置 (x, y, z)

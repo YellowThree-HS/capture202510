@@ -199,10 +199,21 @@ class YOLOSegmentator:
             'segmentation_path': seg_result.get('segmentation_path') if save_result else None
         }
     
-    def detect_and_segment_all(self, image, categories, output_dir="./result", conf=0.1, imgsz=640,save_result=True):
+    def detect_and_segment_all(self, image, categories, output_dir="./result", conf=0.1, imgsz=640, save_result=True, 
+                               multi_instance_classes=None, multi_conf_threshold=0.3, multi_max_count=3):
         """
-        检测并分割所有指定类别的物体（每个类别只保留置信度最高的）
-        (使用 detect 和 segment 函数实现)
+        检测并分割所有指定类别的物体
+        
+        参数:
+            image: 图像路径或数组
+            categories: 要检测的类别列表
+            output_dir: 输出目录
+            conf: 最低置信度阈值
+            imgsz: 图像大小
+            save_result: 是否保存结果
+            multi_instance_classes: 允许保留多个实例的类别列表（如 ['bowl']）
+            multi_conf_threshold: 多实例类别的置信度阈值
+            multi_max_count: 多实例类别的最大保留数量
         
         返回:
             dict: {
@@ -221,6 +232,10 @@ class YOLOSegmentator:
         if save_result:
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
+        
+        if multi_instance_classes is None:
+            multi_instance_classes = []
+            
         # 步骤1: 检测
         det_result = self.detect(image, categories, output_dir, conf, imgsz)
         
@@ -229,11 +244,11 @@ class YOLOSegmentator:
         
         det_bboxes = det_result['det_bboxes']
 
-        # 步骤2: 对每个类别只保留置信度最高的物体
-        print(f"\nFound {len(det_bboxes)} objects, filtering to best per category...")
+        # 步骤2: 筛选物体
+        print(f"\nFound {len(det_bboxes)} objects, filtering...")
 
         # 创建 (idx, class_name, confidence) 的列表并按类别分组
-        best_per_class = {}
+        objects_by_class = {}
         for idx in range(len(det_bboxes)):
             info = {
                 'idx': idx,
@@ -241,23 +256,47 @@ class YOLOSegmentator:
                 'confidence': float(det_bboxes.conf[idx].cpu())
             }
             class_name = info['class_name']
-            # 如果该类别不存在或当前物体置信度更高，则更新
-            if class_name not in best_per_class or info['confidence'] > best_per_class[class_name]['confidence']:
-                best_per_class[class_name] = info
-    
-
-        # 步骤3: 对筛选后的物体进行分割
-        print(f"\nStarting segmentation for {len(best_per_class)} objects...")
+            
+            # 判断是否是多实例类别
+            if class_name in multi_instance_classes:
+                # 多实例类别：保留所有满足阈值的（按置信度排序）
+                if class_name not in objects_by_class:
+                    objects_by_class[class_name] = []
+                if info['confidence'] >= multi_conf_threshold:
+                    objects_by_class[class_name].append(info)
+            else:
+                # 单实例类别：只保留置信度最高的
+                if class_name not in objects_by_class or info['confidence'] > objects_by_class[class_name]['confidence']:
+                    objects_by_class[class_name] = info
         
-        detected_objects = [
-            {
-                'class': class_name,
+        # 处理多实例类别：排序并限制数量
+        selected_objects = []
+        for class_name, objs in objects_by_class.items():
+            if class_name in multi_instance_classes:
+                # 按置信度降序排序，取前 N 个
+                objs_sorted = sorted(objs, key=lambda x: x['confidence'], reverse=True)
+                selected_objects.extend(objs_sorted[:multi_max_count])
+                print(f"  {class_name}: {len(objs_sorted[:multi_max_count])} instances (from {len(objs)} detected, conf>={multi_conf_threshold})")
+            else:
+                # 单实例类别
+                selected_objects.append(objs)
+                print(f"  {class_name}: 1 instance (best)")
+        
+        print(f"\nTotal objects to segment: {len(selected_objects)}")
+    
+        # 步骤3: 对筛选后的物体进行分割
+        print(f"\nStarting segmentation...")
+        
+        detected_objects = []
+        for info in selected_objects:
+            obj = {
+                'class': info['class_name'],
                 'confidence': info['confidence'],
                 'bbox_xyxy': det_bboxes.xyxy[info['idx']].cpu().numpy().astype(int).tolist(),
                 'mask': self.segment(image, det_bboxes.xyxy[info['idx']], output_dir, save_result=save_result)['mask']
             }
-            for class_name, info in best_per_class.items()
-        ]
+            detected_objects.append(obj)
+            print(f"  Segmented: {info['class_name']} (conf={info['confidence']:.2f})")
         
         print(f"\nTotal objects processed: {len(detected_objects)}")
         

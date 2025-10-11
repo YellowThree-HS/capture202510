@@ -89,6 +89,8 @@ with robot:
 - YOLO-World 开放词汇目标检测
 - FastSAM 快速分割
 - 多目标同时检测
+- 支持多实例检测（如检测多个碗）
+- 灵活的置信度和数量控制
 - 结果可视化和保存
 
 **使用示例:**
@@ -97,10 +99,13 @@ from lib.yolo_and_sam import YOLOSegmentator
 
 segmentator = YOLOSegmentator()
 
-# 检测和分割指定类别
+# 检测和分割指定类别（支持多实例）
 result = segmentator.detect_and_segment_all(
     image_path="image.jpg",
-    categories=['cup', 'spoon'],
+    categories=['cup', 'spoon', 'bowl'],
+    multi_instance_classes=['bowl'],  # bowl 保留多个实例
+    multi_conf_threshold=0.30,         # bowl 最低置信度 30%
+    multi_max_count=3,                 # bowl 最多保留 3 个
     save_result=True
 )
 ```

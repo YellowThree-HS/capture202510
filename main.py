@@ -18,7 +18,12 @@ from lib.mask2pose import mask2pose, visualize_result
 def main():
     # --- 配置 ---
     # 你想要检测的物体类别（可以检测多个）
-    categories_to_find = ["cup", "spoon"]
+    categories_to_find = ["cup", "spoon", "bowl"]
+    
+    # Bowl 的特殊配置：保留多个实例
+    multi_instance_classes = ["bowl"]  # 允许检测多个碗
+    bowl_conf_threshold = 0.30  # 碗的置信度阈值（30%）
+    bowl_max_count = 3  # 最多检测3个碗
     
     # 临时图片保存目录
     temp_dir = "./temp"
@@ -32,7 +37,9 @@ def main():
     print("实时D435相机检测程序 - 多物体位姿估计")
     print("=" * 60)
     print("检测类别: " + ", ".join(categories_to_find))
-    print("策略: 每个类别只检测置信度最高的物体")
+    print("策略:")
+    print("  - cup, spoon: 每个类别只检测置信度最高的物体")
+    print(f"  - bowl: 检测最多{bowl_max_count}个物体（置信度>{bowl_conf_threshold*100:.0f}%）")
     print("=" * 60)
     print("控制说明:")
     print("  空格键 - 触发检测和位姿估计")
@@ -133,7 +140,10 @@ def main():
                 start_time = time.time()
                 result = segmentator.detect_and_segment_all(
                     image=temp_image_path,
-                    categories=categories_to_find
+                    categories=categories_to_find,
+                    multi_instance_classes=multi_instance_classes,
+                    multi_conf_threshold=bowl_conf_threshold,
+                    multi_max_count=bowl_max_count
                 )
                 end_time = time.time()
                 
