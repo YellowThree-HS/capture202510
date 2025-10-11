@@ -34,6 +34,11 @@ CAMERA_CONFIGS = {
         'depth': {'width': 1280, 'height': 720, 'fps': 30, 'format': rs.format.z16},
         'description': 'Intel RealSense D415'
     },
+    'D405': {
+        'color': {'width': 640, 'height': 480, 'fps': 30, 'format': rs.format.bgr8},
+        'depth': {'width': 640, 'height': 480, 'fps': 30, 'format': rs.format.z16},
+        'description': 'Intel RealSense D405 (微型近距离相机)'
+    },
     'L515': {
         'color': {'width': 1920, 'height': 1080, 'fps': 30, 'format': rs.format.bgr8},
         'depth': {'width': 1024, 'height': 768, 'fps': 30, 'format': rs.format.z16},
@@ -161,7 +166,9 @@ class Camera:
         print(f"检测到相机: {name} (产品线: {product_line})")
         
         # 根据产品线判断型号
-        if 'D435I' in name.upper() or 'D435 I' in name.upper():
+        if 'D405' in name.upper():
+            return 'D405'
+        elif 'D435I' in name.upper() or 'D435 I' in name.upper():
             return 'D435I'
         elif 'D435' in name.upper():
             return 'D435'
@@ -605,3 +612,17 @@ class Camera:
 
 if __name__ == "__main__":
     print("RealSense")
+    cam = Camera(camera_model='d405')
+    color, depth = cam.get_frames()
+    # realtime
+    while True:
+        color, depth = cam.get_frames()
+        if color is not None:
+            cv2.imshow("Color", color)
+        if depth is not None:
+            depth_colormap = cam.get_depth_colormap(depth)
+            cv2.imshow("Depth", depth_colormap)
+        key = cv2.waitKey(1)
+        if key == 27:  # 按 Esc 键退出
+            break
+    

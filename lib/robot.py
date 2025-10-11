@@ -1,296 +1,182 @@
+from abc import abstractmethod
+from typing import Dict, Protocol
+
 import numpy as np
-from scipy.spatial.transform import Rotation
-import re
-import dobot_api as DobotApi
 import time
 
-class Robot:
-    """
-    一个更高级的 Dobot 机械臂控制类，封装了底层的 DobotApi。
-    提供了更简洁的接口和状态管理。
-    """
-    def __init__(self, ip="192.168.1.6", dashboard_port=29999, feedback_port=30004):
-        """
-        初始化机器人对象。
-        :param ip: 机械臂的 IP 地址。
-        :param dashboard_port: 控制面板端口。
-        :param feedback_port: 反馈端口。
-        """
-        self.ip = ip
-        self.dashboard_port = dashboard_port
-        self.feedback_port = feedback_port
-        self.connected = False
-        self.enabled = False
+class Robot(Protocol):
+    """Robot protocol.
 
-    def connect(self):
+    A protocol for a robot that can be controlled.
+    """
+
+    @abstractmethod
+    def num_dofs(self) -> int:
+        """Get the number of joints of the robot.
+
+        Returns:
+            int: The number of joints of the robot.
         """
-        连接到机器人。
-        :return: bool, True表示成功，False表示失败。
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_joint_state(self) -> np.ndarray:
+        """Get the current state of the leader robot.
+
+        Returns:
+            T: The current state of the leader robot.
         """
-        if self.connected:
-            print("机器人已连接。")
-            return True
-        try:
-            # 只创建控制面板连接，避免重复连接和参数错误
-            self.dashboard = DobotApi.DobotApiDashboard(self.ip, self.dashboard_port)
-            print(f"成功连接到机器人 {self.ip}:{self.dashboard_port}")
-            
-            self.connected = True
-            
-            # 连接后建议清除一下错误状态
+        raise NotImplementedError
+
+    @abstractmethod
+    def command_joint_state(self, joint_state: np.ndarray, flag_in: np.ndarray) -> None:
+        """Command the leader robot to a given state.
+
+        Args:
+            flag_in:
+            joint_state (np.ndarray): The state to command the leader robot to.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_observations(self) -> Dict[str, np.ndarray]:
+        """Get the current observations of the robot.
+
+        This is to extract all the information that is available from the robot,
+        such as joint positions, joint velocities, etc. This may also include
+        information from additional sensors, such as cameras, force sensors, etc.
+
+        Returns:
+            Dict[str, np.ndarray]: A dictionary of observations.
+        """
+        raise NotImplementedError
+
+    def set_do_status(self, which_do):
+        """Get the current observations of the robot.
+
+        Args:
+            which_do:
+        """
+        raise NotImplementedError
+
+    def get_DI_state(self, i):
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_XYZrxryrz_state(self) -> np.ndarray:
+        """Get the current X Y Z rx ry rz state of the robot.
+        Returns:
+            T: The current X Y Z rx ry rz state of the leader robot.
+        """
+        raise NotImplementedError
+
+
+class PrintRobot(Robot):
+    """A robot that prints the commanded joint state."""
+
+    def __init__(self, num_dofs: int, dont_print: bool = False):
+        self._num_dofs = num_dofs
+        # self._joint_state = np.zeros(num_dofs)
+        self._joint_state = np.deg2rad(
+            [90, 0, 90, 0, -90, 0, 90]
+        )  # DOBOT
+
+        self._dont_print = dont_print
+
+    def num_dofs(self) -> int:
+        return self._num_dofs
+
+    def get_joint_state(self) -> np.ndarray:
+        return self._joint_state
+
+    def command_joint_state(self, joint_state: np.ndarray) -> None:
+        assert len(joint_state) == (self._num_dofs), (
+            f"Expected joint state of length {self._num_dofs}, "
+            f"got {len(joint_state)}."
+        )
+        self._joint_state = joint_state
+        if not self._dont_print:
+            print(self._joint_state)
+
+    def get_observations(self) -> Dict[str, np.ndarray]:
+        joint_state = self.get_joint_state()
+        pos_quat = np.zeros(7)
+        return {
+            "joint_positions": joint_state,
+            "joint_velocities": joint_state,
+            "ee_pos_quat": pos_quat,
+            "gripper_position": np.array(0),
+        }
+
+
+class BimanualRobot(Robot):
+    def __init__(self, robot_l: Robot, robot_r: Robot):
+        self._robot_l = robot_l
+        self._robot_r = robot_r
+
+        self.frequency_ = 1/0.015
+        # Set delta time to be used by receiveCallback
+        self.delta_time_ = 1 / self.frequency_
+        assert not self._robot_l.robot_is_err, "left robot error!"
+        assert not self._robot_r.robot_is_err, "right robot error!"
+
+    def num_dofs(self) -> int:
+        return self._robot_l.num_dofs() + self._robot_r.num_dofs()
+
+    def get_joint_state(self) -> np.ndarray:
+        assert not self._robot_l.robot_is_err, "left robot error!"
+        assert not self._robot_r.robot_is_err, "right robot error!"
+        return np.concatenate(
+            (self._robot_l.get_joint_state(), self._robot_r.get_joint_state())
+        )
+
+    def command_joint_state(self, joint_state: np.ndarray, flag_in) -> None:
+        t_start = time.time()
+        assert not self._robot_l.robot_is_err, "left robot error!"
+        assert not self._robot_r.robot_is_err, "right robot error!"
+        # print("t_start:",t_start)
+        if flag_in[0]:
+            self._robot_l.command_joint_state(joint_state[: self._robot_l.num_dofs()])
+        # t_start1 = time.time()
+        if flag_in[1]:
+            self._robot_r.command_joint_state(joint_state[self._robot_l.num_dofs() :])
+        # t_start2 = time.time()
+        return 1
+
+    def get_observations(self) -> Dict[str, np.ndarray]:
+        assert not self._robot_l.robot_is_err, "left robot error!"
+        assert not self._robot_r.robot_is_err, "right robot error!"
+        l_obs = self._robot_l.get_observations()
+        r_obs = self._robot_r.get_observations()
+        assert l_obs.keys() == r_obs.keys()
+        return_obs = {}
+        for k in l_obs.keys():
             try:
-                self.clear_alarms()
-            except Exception as clear_error:
-                print(f"清除报警失败（非关键错误）: {clear_error}")
+                return_obs[k] = np.concatenate((l_obs[k], r_obs[k]))
+            except Exception as e:
+                print(e)
+                print(k)
+                print(l_obs[k])
+                print(r_obs[k])
+                raise RuntimeError()
 
-            return True
-        except Exception as e:
-            print(f"连接失败: {e}")
-            self.connected = False
-            return False
+        return return_obs
 
-    def disconnect(self):
-        """
-        断开与机器人的连接。
-        """
-        if self.connected:
-            if self.enabled:
-                self.disable() # 断开前先禁用机器人
-            
-            # 关闭连接
-            if self.dashboard:
-                try:
-                    self.dashboard.close()
-                except:
-                    pass
-                self.dashboard = None
-                
-            self.connected = False
-            self.enabled = False
-            print("与机器人的连接已关闭。")
+    def set_do_status(self, which_do):
+        assert not self._robot_l.robot_is_err, "left robot error!"
+        assert not self._robot_r.robot_is_err, "right robot error!"
+        self._robot_l.set_do_status(which_do)
 
-    def enable(self):
-        """
-        启用机器人。
-        """
-        if not self.connected:
-            raise ConnectionError("机器人未连接，请先调用 connect()。")
-        
-        try:
-            # 调用 EnableRobot 时不传入参数，使用默认值
-            result = self.dashboard.EnableRobot()
-            print(f"EnableRobot 返回: {result}")
-            
-            # 等待一小段时间确保机器人状态切换完成
-            time.sleep(0.5)
-            self.enabled = True
-            print("机器人已启用。")
-            return True
-        except Exception as e:
-            print(f"启用机器人失败: {e}")
-            return False
+    def get_XYZrxryrz_state(self) -> np.ndarray:
+        assert not self._robot_l.robot_is_err, "left robot error!"
+        assert not self._robot_r.robot_is_err, "right robot error!"
+        return np.concatenate(
+            (self._robot_l.get_XYZrxryrz_state(), self._robot_r.get_XYZrxryrz_state())
+        )
 
-    def disable(self):
-        """
-        禁用机器人。
-        """
-        if not self.connected:
-            raise ConnectionError("机器人未连接，请先调用 connect()。")
-        
-        try:
-            result = self.dashboard.DisableRobot()
-            print(f"DisableRobot 返回: {result}")
-            self.enabled = False
-            print("机器人已禁用。")
-            return True
-        except Exception as e:
-            print(f"禁用机器人失败: {e}")
-            return False
+def main():
+    pass
 
-    def home(self):
-        """
-        让机器人执行归零（Home）操作。
-        """
-        if not self.enabled:
-            raise RuntimeError("机器人未启用，请先调用 enable()。")
-        
-        try:
-            # 使用 sendRecvMsg 方法发送 Home 指令
-            result = self.dashboard.sendRecvMsg("Home(0)")
-            print("正在执行归零操作...")
-            print(f"Home 指令返回: {result}")
-            return True
-        except Exception as e:
-            print(f"归零操作失败: {e}")
-            return False
 
-    def clear_alarms(self):
-        """
-        清除机器人的报警状态。
-        """
-        if not self.connected or not self.dashboard:
-            raise ConnectionError("机器人未连接，请先调用 connect()。")
-        
-        try:
-            result = self.dashboard.ClearError()
-            print(f"清除报警返回: {result}")
-            print("尝试清除报警状态。")
-            return True
-        except Exception as e:
-            print(f"清除报警失败: {e}")
-            return False
-        
-    def get_alarms(self):
-        """
-        获取并返回当前机械臂的报警信息列表。
-        :return: list or None, 报警信息字符串列表，如果没有报警则返回空列表。
-        """
-        if not self.connected or not self.dashboard:
-            raise ConnectionError("机器人未连接，请先调用 connect()。")
-            
-        try:
-            alarm_str = self.dashboard.GetErrorID()
-            # 例子: {0,0,[[1,[]],[2,[]],...]} or {1,0,[[1,[[id,level,type,'description']]],...]}
-            if "[[1,[]]" in alarm_str: # 简单判断没有报警
-                print("当前无报警。")
-                return []
-            
-            # 使用正则表达式解析报警信息
-            alarms = re.findall(r"\[(\d+),(\d+),(\d+),'(.*?)'\]", alarm_str)
-            if not alarms:
-                return []
-            
-            alarm_list = [f"ID:{a[0]}, Level:{a[1]}, Type:{a[2]}, Desc:'{a[3]}'" for a in alarms]
-            print("检测到报警:", alarm_list)
-            return alarm_list
-        except Exception as e:
-            print(f"获取报警信息失败: {e}")
-            return []
-
-    def move_to(self, x, y, z, r, mode='joint'):
-        """
-        移动机器人到指定位置。
-        :param x, y, z, r: 目标点位坐标。
-        :param mode: 移动模式。'joint' (关节移动, MovJ) 或 'linear' (直线移动, MovL)。
-        """
-        if not self.enabled:
-            raise RuntimeError("机器人未启用，请先调用 enable()。")
-        
-        print(f"准备以 {mode} 模式移动到: ({x}, {y}, {z}, {r})")
-        try:
-            if mode.lower() == 'joint':
-                # MovJ 需要坐标模式参数，1表示笛卡尔坐标系
-                result = self.dashboard.MovJ(x, y, z, r, 0, 0, 1)
-                print(f"MovJ 返回: {result}")
-            elif mode.lower() == 'linear':
-                # MovL 需要坐标模式参数，1表示笛卡尔坐标系
-                result = self.dashboard.MovL(x, y, z, r, 0, 0, 1)
-                print(f"MovL 返回: {result}")
-            else:
-                raise ValueError("无效的移动模式。请选择 'joint' 或 'linear'。")
-            return True
-        except Exception as e:
-            print(f"移动失败: {e}")
-            return False
-        # 同样，移动需要时间，这里只发送指令
-
-    def get_pose(self):
-        """
-        获取当前末端工具的位姿，并返回一个4x4的齐次变换矩阵。
-        位置单位为毫米 (mm)。
-        :return: numpy.ndarray or None, 4x4齐次变换矩阵。
-        """
-        if not self.connected:
-            raise ConnectionError("机器人未连接，请先调用 connect()。")
-            
-        pose_str = self.dashboard.GetPose()
-        match = re.search(r'\{([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+),([\d.-]+)\}', pose_str)
-        if not match:
-            print("错误: 无法解析位姿字符串。")
-            return None
-            
-        x, y, z, rx, ry, rz = map(float, match.groups())
-        
-        T = np.eye(4)
-        T[:3, 3] = [x, y, z] # 位置 (mm)
-        rot_matrix = Rotation.from_euler('xyz', [rx, ry, rz], degrees=True).as_matrix()
-        T[:3, :3] = rot_matrix
-        
-        return T
-
-    # --- 上下文管理器，用于 with 语句 ---
-    def __enter__(self):
-        """`with`语句进入时调用: 连接并启用机器人。"""
-        self.connect()
-        if self.connected:
-            self.enable()
-        return self
-        
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """`with`语句退出时调用: 禁用并断开机器人。"""
-        print("程序块结束，自动断开连接...")
-        self.disconnect()
-
-# --- 主程序：使用示例 ---
-if __name__ == '__main__':
-    # 请将 IP 替换为你的机器人 IP
-    ROBOT_IP = "192.168.1.6"
-
-    # --- 示例1: 标准用法 ---
-    print("--- 示例1: 标准用法 ---")
-    robot = Robot(ROBOT_IP)
-    if robot.connect():
-        try:
-            robot.enable()
-            
-            # 获取当前报警
-            robot.get_alarms()
-            
-            # 获取当前位姿
-            current_pose_matrix = robot.get_pose()
-            if current_pose_matrix is not None:
-                print("当前机器人位姿矩阵:\n", np.round(current_pose_matrix, 2))
-            
-            # 移动机器人
-            print("\n正在进行关节移动 (MovJ)...")
-            robot.move_to(250, 0, 50, 0, mode='joint')
-            time.sleep(5) # 等待移动完成
-
-            print("\n正在进行直线移动 (MovL)...")
-            robot.move_to(250, 100, 50, 0, mode='linear')
-            time.sleep(5) # 等待移动完成
-            
-            # 最终禁用机器人
-            robot.disable()
-            
-        except (ConnectionError, RuntimeError, ValueError) as e:
-            print(f"发生错误: {e}")
-        finally:
-            # 无论如何，最后都断开连接
-            robot.disconnect()
-            
-    # --- 示例2: 使用 `with` 语句进行优雅管理 ---
-    print("\n\n--- 示例2: 使用 `with` 语句 ---")
-    try:
-        # with语句会自动处理连接、启用、禁用和断开
-        with Robot(ROBOT_IP) as robot:
-            print("机器人已在 'with' 块中自动连接并启用。")
-            
-            # 获取当前位姿
-            pose = robot.get_pose()
-            if pose is not None:
-                print("当前位置 (x, y, z) in mm:", np.round(pose[:3, 3], 2))
-            
-            # 执行移动
-            robot.move_to(200, -100, 20, 0, mode='joint')
-            time.sleep(5)
-            
-            robot.move_to(200, 100, 20, 0, mode='linear')
-            time.sleep(5)
-            
-        # 当代码离开 'with' 块时，__exit__ 会被自动调用，机器人被禁用和断开
-        print("'with' 块执行完毕。")
-        
-    except Exception as e:
-        print(f"在 'with' 块中发生错误: {e}")
-
+if __name__ == "__main__":
+    main()

@@ -8,9 +8,9 @@ from lib.robot import Robot
 # ------------------- 1. 配置参数 -------------------
 
 # 手眼标定模式
-CALIBRATION_MODE = "eye_to_hand"  # "eye_to_hand" 或 "eye_in_hand"
+CALIBRATION_MODE = "eye_in_hand"  # "eye_to_hand" 或 "eye_in_hand"
 
-# 棋盘格标定板参数
+# 棋盘格标定板参数 (需要与实际打印的标定板一致)
 CHESSBOARD_CORNERS_NUM_X = 9  # 棋盘格内部角点的列数
 CHESSBOARD_CORNERS_NUM_Y = 6  # 棋盘格内部角点的行数
 CHESSBOARD_SQUARE_SIZE_MM = 20  # 棋盘格方块的物理边长（单位：毫米）
@@ -72,8 +72,15 @@ def find_chessboard_pose(image, obj_points):
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     
+    # 使用更宽松的标志来提高检测率
+    flags = cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE + cv2.CALIB_CB_FAST_CHECK
+    
     # 查找棋盘格角点
-    ret, corners = cv2.findChessboardCorners(gray, (CHESSBOARD_CORNERS_NUM_X, CHESSBOARD_CORNERS_NUM_Y), None)
+    ret, corners = cv2.findChessboardCorners(
+        gray, 
+        (CHESSBOARD_CORNERS_NUM_X, CHESSBOARD_CORNERS_NUM_Y), 
+        flags=flags
+    )
     
     vis_image = image.copy()
 
@@ -123,7 +130,9 @@ def collect_calibration_data():
     print(f"目标采集数量: {NUM_CALIBRATION_POSES}")
     print("操作指南:")
     print("  - 移动机器人，确保棋盘格在相机视野内清晰可见。")
+    print("  - 提示：请使用示教器或外部控制移动机器人到不同位姿")
     print("  - 当角点被稳定检测到（绿色连线），按下 'c' 键采集当前数据。")
+    print("  - 按下 's' 键显示当前机器人位姿信息。")
     print("  - 按下 'q' 键退出采集。")
     print("="*50)
 
@@ -503,12 +512,12 @@ if __name__ == "__main__":
     
     try:
         # ---- 初始化相机 ----
-        print("正在初始化RealSense相机...")
-        cam = Camera(camera_model='d435') 
-        print("相机连接成功。")
+        # print("正在初始化RealSense相机...")
+        # cam = Camera(camera_model='d405') 
+        # print("相机连接成功。")
 
         print("正在连接机器人...")
-        robot_ip = "192.168.1.6"
+        robot_ip = "192.168.5.1"
         robot = Robot(robot_ip)
         if robot.connect():
             try:
@@ -520,67 +529,72 @@ if __name__ == "__main__":
             print("机器人连接失败，请检查连接。")
             robot = None
         
-        # 自动获取相机内参
-        CAMERA_MATRIX = cam.get_camera_matrix('color')
-        DISTORTION_COEFFS = cam.get_distortion_coeffs('color')
-
-        if CAMERA_MATRIX is None:
-            raise RuntimeError("无法获取相机内参矩阵，请检查相机连接和配置。")
-
-        print("相机初始化成功，内参已自动加载。")
-        print("相机矩阵:\n", CAMERA_MATRIX)
-        print("畸变系数:\n", DISTORTION_COEFFS)
+        x,y,z,rx,ry,rz = robot.get_pose_vector()
+        print('{'+f'"x": {x}, "y": {y}, "z": {z}, "rx": {rx}, "ry": {ry}, "rz": {rz}'+'}')
         
-        # ---- 主循环 ----
-        while True:
-            print(f"\n手眼标定程序 (当前模式: {CALIBRATION_MODE})")
-            print("=" * 50)
-            print("可用操作:")
-            print("1. 采集数据")
-            print("2. 执行标定")
-            print("3. 切换标定模式")
-            print("4. 验证标定结果")
-            print("q. 退出程序")
-            print("=" * 50)
-            
-            choice = input("请选择要执行的操作 (1/2/3/4/q): ").strip().lower()
-
-            if choice == '1':
-                print(f"\n开始数据采集 (模式: {CALIBRATION_MODE})")
-                if CALIBRATION_MODE == "eye_in_hand":
-                    print("注意: 眼在手上模式 - 相机固定在机器人末端")
-                    print("移动机器人时，确保标定板始终在相机视野内")
-                else:
-                    print("注意: 眼在手外模式 - 相机固定在环境中")
-                    print("移动机器人和标定板，确保标定板在相机视野内")
-                collect_calibration_data()
-                
-            elif choice == '2':
-                result = perform_calibration()
-                if result is not None:
-                    print(f"\n标定完成！模式: {CALIBRATION_MODE}")
-                    
-            elif choice == '3':
-                switch_calibration_mode()
-                
-            elif choice == '4':
-                validate_calibration_result()
-                
-            elif choice == 'q':
-                print("退出程序。")
-                break
-                
-            else:
-                print("无效的选择，请重试。")
-
     except Exception as e:
-        print(f"\n程序发生错误: {e}")
-    finally:
-        if cam:
-            cam.release()
-        print("程序退出。")
-        if cam:
-            cam.release()
-        print("程序退出。")
+        print(f"初始化设备时出错: {e}")
+        # # 自动获取相机内参
+        # CAMERA_MATRIX = cam.get_camera_matrix('color')
+        # DISTORTION_COEFFS = cam.get_distortion_coeffs('color')
+
+    #     if CAMERA_MATRIX is None:
+    #         raise RuntimeError("无法获取相机内参矩阵，请检查相机连接和配置。")
+
+    #     print("相机初始化成功，内参已自动加载。")
+    #     print("相机矩阵:\n", CAMERA_MATRIX)
+    #     print("畸变系数:\n", DISTORTION_COEFFS)
+        
+    #     # ---- 主循环 ----
+    #     while True:
+    #         print(f"\n手眼标定程序 (当前模式: {CALIBRATION_MODE})")
+    #         print("=" * 50)
+    #         print("可用操作:")
+    #         print("1. 采集数据")
+    #         print("2. 执行标定")
+    #         print("3. 切换标定模式")
+    #         print("4. 验证标定结果")
+    #         print("q. 退出程序")
+    #         print("=" * 50)
+            
+    #         choice = input("请选择要执行的操作 (1/2/3/4/q): ").strip().lower()
+
+    #         if choice == '1':
+    #             print(f"\n开始数据采集 (模式: {CALIBRATION_MODE})")
+    #             if CALIBRATION_MODE == "eye_in_hand":
+    #                 print("注意: 眼在手上模式 - 相机固定在机器人末端")
+    #                 print("移动机器人时，确保标定板始终在相机视野内")
+    #             else:
+    #                 print("注意: 眼在手外模式 - 相机固定在环境中")
+    #                 print("移动机器人和标定板，确保标定板在相机视野内")
+    #             collect_calibration_data()
+                
+    #         elif choice == '2':
+    #             result = perform_calibration()
+    #             if result is not None:
+    #                 print(f"\n标定完成！模式: {CALIBRATION_MODE}")
+                    
+    #         elif choice == '3':
+    #             switch_calibration_mode()
+                
+    #         elif choice == '4':
+    #             validate_calibration_result()
+                
+    #         elif choice == 'q':
+    #             print("退出程序。")
+    #             break
+                
+    #         else:
+    #             print("无效的选择，请重试。")
+
+    # except Exception as e:
+    #     print(f"\n程序发生错误: {e}")
+    # finally:
+    #     if cam:
+    #         cam.release()
+    #     print("程序退出。")
+    #     if cam:
+    #         cam.release()
+    #     print("程序退出。")
 
 
