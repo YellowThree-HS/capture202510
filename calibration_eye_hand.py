@@ -512,9 +512,9 @@ if __name__ == "__main__":
     
     try:
         # ---- 初始化相机 ----
-        # print("正在初始化RealSense相机...")
-        # cam = Camera(camera_model='d405') 
-        # print("相机连接成功。")
+        print("正在初始化RealSense相机...")
+        cam = Camera(camera_model='d405') 
+        print("相机连接成功。")
 
         print("正在连接机器人...")
         robot_ip = "192.168.5.1"
@@ -535,66 +535,66 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"初始化设备时出错: {e}")
         # # 自动获取相机内参
-        # CAMERA_MATRIX = cam.get_camera_matrix('color')
-        # DISTORTION_COEFFS = cam.get_distortion_coeffs('color')
+        CAMERA_MATRIX = cam.get_camera_matrix('color')
+        DISTORTION_COEFFS = cam.get_distortion_coeffs('color')
 
-    #     if CAMERA_MATRIX is None:
-    #         raise RuntimeError("无法获取相机内参矩阵，请检查相机连接和配置。")
+        if CAMERA_MATRIX is None:
+            raise RuntimeError("无法获取相机内参矩阵，请检查相机连接和配置。")
 
-    #     print("相机初始化成功，内参已自动加载。")
-    #     print("相机矩阵:\n", CAMERA_MATRIX)
-    #     print("畸变系数:\n", DISTORTION_COEFFS)
+        print("相机初始化成功，内参已自动加载。")
+        print("相机矩阵:\n", CAMERA_MATRIX)
+        print("畸变系数:\n", DISTORTION_COEFFS)
         
-    #     # ---- 主循环 ----
-    #     while True:
-    #         print(f"\n手眼标定程序 (当前模式: {CALIBRATION_MODE})")
-    #         print("=" * 50)
-    #         print("可用操作:")
-    #         print("1. 采集数据")
-    #         print("2. 执行标定")
-    #         print("3. 切换标定模式")
-    #         print("4. 验证标定结果")
-    #         print("q. 退出程序")
-    #         print("=" * 50)
+        # ---- 主循环 ----
+        while True:
+            print(f"\n手眼标定程序 (当前模式: {CALIBRATION_MODE})")
+            print("=" * 50)
+            print("可用操作:")
+            print("1. 采集数据")
+            print("2. 执行标定")
+            print("3. 切换标定模式")
+            print("4. 验证标定结果")
+            print("q. 退出程序")
+            print("=" * 50)
             
-    #         choice = input("请选择要执行的操作 (1/2/3/4/q): ").strip().lower()
+            choice = input("请选择要执行的操作 (1/2/3/4/q): ").strip().lower()
 
-    #         if choice == '1':
-    #             print(f"\n开始数据采集 (模式: {CALIBRATION_MODE})")
-    #             if CALIBRATION_MODE == "eye_in_hand":
-    #                 print("注意: 眼在手上模式 - 相机固定在机器人末端")
-    #                 print("移动机器人时，确保标定板始终在相机视野内")
-    #             else:
-    #                 print("注意: 眼在手外模式 - 相机固定在环境中")
-    #                 print("移动机器人和标定板，确保标定板在相机视野内")
-    #             collect_calibration_data()
+            if choice == '1':
+                print(f"\n开始数据采集 (模式: {CALIBRATION_MODE})")
+                if CALIBRATION_MODE == "eye_in_hand":
+                    print("注意: 眼在手上模式 - 相机固定在机器人末端")
+                    print("移动机器人时，确保标定板始终在相机视野内")
+                else:
+                    print("注意: 眼在手外模式 - 相机固定在环境中")
+                    print("移动机器人和标定板，确保标定板在相机视野内")
+                collect_calibration_data()
                 
-    #         elif choice == '2':
-    #             result = perform_calibration()
-    #             if result is not None:
-    #                 print(f"\n标定完成！模式: {CALIBRATION_MODE}")
+            elif choice == '2':
+                result = perform_calibration()
+                if result is not None:
+                    print(f"\n标定完成！模式: {CALIBRATION_MODE}")
                     
-    #         elif choice == '3':
-    #             switch_calibration_mode()
+            elif choice == '3':
+                switch_calibration_mode()
                 
-    #         elif choice == '4':
-    #             validate_calibration_result()
+            elif choice == '4':
+                validate_calibration_result()
                 
-    #         elif choice == 'q':
-    #             print("退出程序。")
-    #             break
+            elif choice == 'q':
+                print("退出程序。")
+                break
                 
-    #         else:
-    #             print("无效的选择，请重试。")
+            else:
+                print("无效的选择，请重试。")
 
-    # except Exception as e:
-    #     print(f"\n程序发生错误: {e}")
-    # finally:
-    #     if cam:
-    #         cam.release()
-    #     print("程序退出。")
-    #     if cam:
-    #         cam.release()
-    #     print("程序退出。")
+    except Exception as e:
+        print(f"\n程序发生错误: {e}")
+    finally:
+        if cam:
+            cam.release()
+        print("程序退出。")
+        if cam:
+            cam.release()
+        print("程序退出。")
 
 

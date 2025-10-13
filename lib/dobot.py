@@ -1,20 +1,23 @@
 from typing import Dict
 import numpy as np
 import time
-from robot import Robot
+from .robot import Robot
 import struct
 import sys
+sys.path.append("../lib")
 # from scripts.manipulate_utils import load_ini_data_hands, load_ini_data_gripper
 # from scripts.manipulate_utils import robot_pose_init, pose_check, dynamic_approach, obs_action_check, \
 #     servo_action_check, load_ini_data_hands, set_light, load_ini_data_camera
 from threading import Event, Lock, Thread
+from scipy.spatial.transform import Rotation
+
 
 
 class DobotRobot(Robot):
     """A class representing a UR robot."""
 
     def __init__(self, robot_ip: str = "192.168.5.1", no_gripper: bool = True, robot_number: int = 1):
-        import dobot_api
+        from . import dobot_api
         self.robot_number = robot_number
         self.frequency_ = 1 / 0.015
         # Set delta time to be used by receiveCallback
@@ -151,7 +154,6 @@ class DobotRobot(Robot):
         """
         assert not self.robot_is_err, f"{self.robot_ip}: error!"
         tic = time.time()
-        print(pose)
         self.robot.MovL(pose[0], pose[1], pose[2], pose[3], pose[4], pose[5])
         toc = time.time()
 
@@ -163,10 +165,9 @@ class DobotRobot(Robot):
             joint_state (np.ndarray): The state to command the leader robot to.
         """
         assert not self.robot_is_err, f"{self.robot_ip}: error!"
-        robot_joints_angle = joint_state[:6]  # ��λ������
-        robot_joints = [np.rad2deg(robot_joint) for robot_joint in robot_joints_angle]  # ��λ���Ƕ�
+        robot_joints = joint_state[:6]  # ��λ������
+        # robot_joints = [np.rad2deg(robot_joint) for robot_joint in robot_joints_angle]  # ��λ���Ƕ�
         tic = time.time()
-        print(robot_joints)
         self.robot.JointMovJ(robot_joints[0],
                              robot_joints[1],
                              robot_joints[2],
@@ -236,6 +237,23 @@ class DobotRobot(Robot):
         self.r_inter.DO(which_do[0], which_do[1])
         return 1
 
+    def get_pose_matrix(self):
+        """
+        获取当前末端工具的位姿，并返回一个4x4的齐次变换矩阵。
+        位置单位为毫米 (mm)。
+        :return: numpy.ndarray or None, 4x4齐次变换矩阵。
+        """
+        
+        [x, y, z, rx, ry, rz] = self.get_XYZrxryrz_state()
+        print("x, y, z, rx, ry, rz:", x, y, z, rx, ry, rz)
+        T = np.eye(4)
+        T[:3, 3] = [x, y, z] # 位置 (mm)
+        rot_matrix = Rotation.from_euler('xyz', [rx, ry, rz], degrees=True).as_matrix()
+        T[:3, :3] = rot_matrix
+        
+        return T
+
+
 
 def main():
     dobot = DobotRobot("192.168.5.1", no_gripper=False)
@@ -243,6 +261,7 @@ def main():
     pose = np.array([-95.022476,-392.278442,344.093872,165.906189,9.096970,45.669773])
     dobot.moveL(pose)
     print(dobot.r_inter.GetPose())
+    print(dobot.get_pose_matrix())
 
 
 

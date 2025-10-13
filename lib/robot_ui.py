@@ -6,8 +6,8 @@ from tkinter import ttk, messagebox
 from tkinter.scrolledtext import ScrolledText
 from dobot_api import *
 import json
-from files.alarmController import alarm_controller_list
-from files.alarmServo import alarm_servo_list
+from files.alarm_controller import alarm_controller_list
+from files.alarm_servo import alarm_servo_list
 
 LABEL_JOINT = [["J1-", "J2-", "J3-", "J4-", "J5-", "J6-"],
                ["J1:", "J2:", "J3:", "J4:", "J5:", "J6:"],
@@ -36,11 +36,11 @@ class RobotUI(object):
 
     def __init__(self):
         self.root = Tk()
-        self.root.title("Python demo V4")
+        self.root.title("Python demo V3")
         # fixed window size
         self.root.geometry("900x850")
         # set window icon
-        # self.root.iconbitmap("images/robot.ico")
+        self.root.iconbitmap("images/robot.ico")
 
         # global state dict
         self.global_state = {}
@@ -57,7 +57,7 @@ class RobotUI(object):
 
         self.label_ip = Label(self.frame_robot, text="IP Address:")
         self.label_ip.place(rely=0.2, x=10)
-        ip_port = StringVar(self.root, value="8.209.98.146")
+        ip_port = StringVar(self.root, value="192.168.5.1")
         self.entry_ip = Entry(self.frame_robot, width=12, textvariable=ip_port)
         self.entry_ip.place(rely=0.2, x=90)
 
@@ -68,12 +68,19 @@ class RobotUI(object):
             self.frame_robot, width=7, textvariable=dash_port)
         self.entry_dash.place(rely=0.2, x=320)
 
+        self.label_move = Label(self.frame_robot, text="Move Port:")
+        self.label_move.place(rely=0.2, x=400)
+        move_port = IntVar(self.root, value=30003)
+        self.entry_move = Entry(
+            self.frame_robot, width=7, textvariable=move_port)
+        self.entry_move.place(rely=0.2, x=480)
+
         self.label_feed = Label(self.frame_robot, text="Feedback Port:")
-        self.label_feed.place(rely=0.2, x=420)
+        self.label_feed.place(rely=0.2, x=580)
         feed_port = IntVar(self.root, value=30004)
         self.entry_feed = Entry(
             self.frame_robot, width=7, textvariable=feed_port)
-        self.entry_feed.place(rely=0.2, x=520)
+        self.entry_feed.place(rely=0.2, x=680)
 
         # Connect/DisConnect
         self.button_connect = self.set_button(master=self.frame_robot,
@@ -91,19 +98,26 @@ class RobotUI(object):
         self.button_enable["width"] = 7
         self.global_state["enable"] = False
 
+        # Reset Robot / Clear Error / Continue
+        self.set_button(master=self.frame_dashboard,
+                        text="ResetRobot", rely=0.1, x=90, command=self.reset_robot)
         self.set_button(master=self.frame_dashboard,
                         text="ClearError", rely=0.1, x=200, command=self.clear_error)
+        self.set_button(master=self.frame_dashboard,
+                        text=" Continue ", rely=0.1, x=300, command=self.Continue)
+        self.set_button(master=self.frame_dashboard,
+                        text="PowerOn", rely=0.1, x=390, command=self.PowerOn)
 
         # Speed Ratio
         self.label_speed = Label(self.frame_dashboard, text="Speed Ratio:")
-        self.label_speed.place(rely=0.1, x=430)
+        self.label_speed.place(rely=0.1, x=480)
 
         s_value = StringVar(self.root, value="50")
         self.entry_speed = Entry(self.frame_dashboard,
                                  width=6, textvariable=s_value)
-        self.entry_speed.place(rely=0.1, x=520)
+        self.entry_speed.place(rely=0.1, x=570)
         self.label_cent = Label(self.frame_dashboard, text="%")
-        self.label_cent.place(rely=0.1, x=550)
+        self.label_cent.place(rely=0.1, x=620)
 
         self.set_button(master=self.frame_dashboard,
                         text="Confirm", rely=0.1, x=586, command=self.confirm_speed)
@@ -166,7 +180,7 @@ class RobotUI(object):
                       default_value="120", entry_value=540, rely=0.5, master=self.frame_move)
 
         self.set_button(master=self.frame_move,
-                        text="MovJ", rely=0.45, x=610, command=self.joint_movj)
+                        text="JointMovJ", rely=0.45, x=610, command=self.joint_movj)
 
         self.frame_feed_log = Frame(
             self.root, bg="#FFFFFF", width=870, pady=10, height=400, border=2)
@@ -224,6 +238,7 @@ class RobotUI(object):
 
         # initial client
         self.client_dash = None
+        self.client_move = None
         self.client_feed = None
 
         self.alarm_controller_dict = self.convert_dict(alarm_controller_list)
@@ -261,14 +276,11 @@ class RobotUI(object):
 
     def move_jog(self, text):
         if self.global_state["connect"]:
-            if text[0] == "J":
-                self.client_dash.MoveJog(text)
-            else:
-                self.client_dash.MoveJog(text,coordtype=1,user=0,tool=0)
+            self.client_move.MoveJog(text)
 
     def move_stop(self, event):
         if self.global_state["connect"]:
-            self.client_dash.MoveJog("")
+            self.client_move.MoveJog("")
 
     def set_button(self, master, text, rely, x, **kargs):
         self.button = Button(master, text=text, padx=5,
@@ -302,8 +314,10 @@ class RobotUI(object):
             print("断开成功")
             self.client_dash.close()
             self.client_feed.close()
+            self.client_move.close()
             self.client_dash = None
             self.client_feed = None
+            self.client_move = None
 
             for i in self.button_list:
                 i["state"] = "disable"
@@ -313,7 +327,9 @@ class RobotUI(object):
                 print("连接成功")
                 self.client_dash = DobotApiDashboard(
                     self.entry_ip.get(), int(self.entry_dash.get()), self.text_log)
-                self.client_feed = DobotApiFeedBack(
+                self.client_move = DobotApiMove(
+                    self.entry_ip.get(), int(self.entry_move.get()), self.text_log)
+                self.client_feed = DobotApi(
                     self.entry_ip.get(), int(self.entry_feed.get()), self.text_log)
             except Exception as e:
                 messagebox.showerror("Attention!", f"Connection Error:{e}")
@@ -343,23 +359,32 @@ class RobotUI(object):
 
         self.global_state["enable"] = not self.global_state["enable"]
 
+    def reset_robot(self):
+        self.client_dash.ResetRobot()
+
     def clear_error(self):
         self.client_dash.ClearError()
+
+    def Continue(self):
+        self.client_dash.Continue()
+
+    def PowerOn(self):
+        self.client_dash.PowerOn()
 
     def confirm_speed(self):
         self.client_dash.SpeedFactor(int(self.entry_speed.get()))
 
     def movj(self):
-        self.client_dash.MovJ(float(self.entry_dict["X:"].get()), float(self.entry_dict["Y:"].get()), float(self.entry_dict["Z:"].get()),
-                              float(self.entry_dict["Rx:"].get()), float(self.entry_dict["Ry:"].get()), float(self.entry_dict["Rz:"].get()),0)
-        
+        self.client_move.MovJ(float(self.entry_dict["X:"].get()), float(self.entry_dict["Y:"].get()), float(self.entry_dict["Z:"].get()),
+                              float(self.entry_dict["Rx:"].get()), float(self.entry_dict["Ry:"].get()), float(self.entry_dict["Rz:"].get()))
+
     def movl(self):
-        self.client_dash.MovL(float(self.entry_dict["X:"].get()), float(self.entry_dict["Y:"].get()), float(self.entry_dict["Z:"].get()),
-                              float(self.entry_dict["Rx:"].get()), float(self.entry_dict["Ry:"].get()), float(self.entry_dict["Rz:"].get()),0)
+        self.client_move.MovL(float(self.entry_dict["X:"].get()), float(self.entry_dict["Y:"].get()), float(self.entry_dict["Z:"].get()),
+                              float(self.entry_dict["Rx:"].get()), float(self.entry_dict["Ry:"].get()), float(self.entry_dict["Rz:"].get()))
 
     def joint_movj(self):
-        self.client_dash.MovJ(float(self.entry_dict["J1:"].get()), float(self.entry_dict["J2:"].get()), float(self.entry_dict["J3:"].get()),
-                                   float(self.entry_dict["J4:"].get()), float(self.entry_dict["J5:"].get()), float(self.entry_dict["J6:"].get()),1)
+        self.client_move.JointMovJ(float(self.entry_dict["J1:"].get()), float(self.entry_dict["J2:"].get()), float(self.entry_dict["J3:"].get()),
+                                   float(self.entry_dict["J4:"].get()), float(self.entry_dict["J5:"].get()), float(self.entry_dict["J6:"].get()))
 
     def confirm_do(self):
         if self.combo_status.get() == "On":
@@ -417,90 +442,63 @@ class RobotUI(object):
             self.frame_feed, text_list[2][5], rely=0.7, x=x4, command=lambda: self.move_jog(text_list[2][0]))
 
     def feed_back(self):
+        hasRead = 0
         while True:
             print("self.global_state(connect)", self.global_state["connect"])
             if not self.global_state["connect"]:
                 break
-
-            self.client_feed.socket_dobot.setblocking(True)  # 设置为阻塞模式
             data = bytes()
-            temp = self.client_feed.socket_dobot.recv(144000)
-            if len(temp) > 1440:
-                temp = self.client_feed.socket_dobot.recv(144000)
-            data = temp[0:1440]
-        
+            while hasRead < 1440:
+                temp = self.client_feed.socket_dobot.recv(1440 - hasRead)
+                if len(temp) > 0:
+                    hasRead += len(temp)
+                    data += temp
+            hasRead = 0
 
             a = np.frombuffer(data, dtype=MyType)
-            print("robot_mode:", a["RobotMode"][0])
-            print("TestValue:", hex((a['TestValue'][0])))
-            if hex((a['TestValue'][0])) == '0x123456789abcdef':
+            print("robot_mode:", a["robot_mode"][0])
+            print("test_value:", hex((a['test_value'][0])))
+            if hex((a['test_value'][0])) == '0x123456789abcdef':
                 # print('tool_vector_actual',
                 #       np.around(a['tool_vector_actual'], decimals=4))
-                # print('QActual', np.around(a['q_aQActualctual'], decimals=4))
+                # print('q_actual', np.around(a['q_actual'], decimals=4))
 
                 # Refresh Properties
-                self.label_feed_speed["text"] = a["SpeedScaling"][0]
-                self.label_robot_mode["text"] = LABEL_ROBOT_MODE[a["RobotMode"][0]]
-                self.label_di_input["text"] = bin(a["DigitalInputs"][0])[
+                self.label_feed_speed["text"] = a["speed_scaling"][0]
+                self.label_robot_mode["text"] = LABEL_ROBOT_MODE[a["robot_mode"][0]]
+                self.label_di_input["text"] = bin(a["digital_input_bits"][0])[
                     2:].rjust(64, '0')
-                self.label_di_output["text"] = bin(a["DigitalOutputs"][0])[
+                self.label_di_output["text"] = bin(a["digital_output_bits"][0])[
                     2:].rjust(64, '0')
 
                 # Refresh coordinate points
-                self.set_feed_joint(LABEL_JOINT, a["QActual"])
-                self.set_feed_joint(LABEL_COORD, a["ToolVectorActual"])
+                self.set_feed_joint(LABEL_JOINT, a["q_actual"])
+                self.set_feed_joint(LABEL_COORD, a["tool_vector_actual"])
 
                 # check alarms
-                if a["RobotMode"] == 9:
+                if a["robot_mode"] == 9:
                     self.display_error_info()
 
+            time.sleep(0.005)
 
     def display_error_info(self):
-        # Try to use GetError interface first / 优先尝试使用GetError接口
-        try:
-            error_info = self.client_dash.GetError("en")  # Use English for UI display
-            if error_info and "errMsg" in error_info and error_info["errMsg"]:
-                # Use new GetError interface / 使用新的GetError接口
-                for error in error_info["errMsg"]:
-                    self.form_error_new(error)
-                return
-        except Exception as e:
-            print(f"GetError interface failed, using fallback method: {e}")
-        
-        # Fallback to original method / 回退到原来的方法
-        try:
-            error_list = self.client_dash.GetErrorID().split("{")[1].split("}")[0]
-            error_list = json.loads(error_list)
-            print("error_list:", error_list)
-            if error_list[0]:
-                for i in error_list[0]:
-                    self.form_error(i, self.alarm_controller_dict,
-                                    "Controller Error")
+        error_list = self.client_dash.GetErrorID().split("{")[1].split("}")[0]
 
-            for m in range(1, len(error_list)):
-                if error_list[m]:
-                    for n in range(len(error_list[m])):
-                        self.form_error(n, self.alarm_servo_dict, "Servo Error")
-        except Exception as e:
-            print(f"Both error retrieval methods failed: {e}")
+        error_list = json.loads(error_list)
+        print("error_list:", error_list)
+        if error_list[0]:
+            for i in error_list[0]:
+                self.form_error(i, self.alarm_controller_dict,
+                                "Controller Error")
 
-    def form_error_new(self, error_data):
-        """Handle error data from GetError interface / 处理GetError接口返回的错误数据"""
-        try:
-            error_info = f"Time Stamp:{error_data.get('date', 'N/A')} {error_data.get('time', 'N/A')}\n"
-            error_info += f"ID:{error_data.get('id', 'N/A')}\n"
-            error_info += f"Type:{error_data.get('mode', 'N/A')}\n"
-            error_info += f"Level:{error_data.get('level', 'N/A')}\n"
-            error_info += f"Description:{error_data.get('description', 'N/A')}\n"
-            error_info += f"Solution:{error_data.get('solution', 'N/A')}\n\n"
-            
-            self.text_err.insert(END, error_info)
-        except Exception as e:
-            print(f"Error formatting new error data: {e}")
-    
+        for m in range(1, len(error_list)):
+            if error_list[m]:
+                for n in range(len(error_list[m])):
+                    self.form_error(n, self.alarm_servo_dict, "Servo Error")
+
     def form_error(self, index, alarm_dict: dict, type_text):
         if index in alarm_dict.keys():
-            date = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            date = datetime.datetime.now().strftime("%Y.%m.%d:%H:%M:%S ")
             error_info = f"Time Stamp:{date}\n"
             error_info = error_info + f"ID:{index}\n"
             error_info = error_info + \
@@ -520,7 +518,7 @@ class RobotUI(object):
         self.label_feed_dict[label[1][3]]["text"] = array_value[0][3]
         self.label_feed_dict[label[1][4]]["text"] = array_value[0][4]
         self.label_feed_dict[label[1][5]]["text"] = array_value[0][5]
-
+        
 if __name__ == '__main__':
     robot_ui = RobotUI()
     robot_ui.pack()

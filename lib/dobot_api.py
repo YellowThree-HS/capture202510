@@ -719,7 +719,6 @@ class DobotApiMove(DobotApi):
         for params in dynParams:
             string = string + "," + str(params)
         string = string + ")"
-        print(string)
         return self.sendRecvMsg(string)
 
     def MovL(self, x, y, z, rx, ry, rz, *dynParams):
@@ -737,7 +736,6 @@ class DobotApiMove(DobotApi):
         for params in dynParams:
             string = string + "," + str(params)
         string = string + ")"
-        print(string)
         return self.sendRecvMsg(string)
 
     def JointMovJ(self, j1, j2, j3, j4, j5, j6, *dynParams):
