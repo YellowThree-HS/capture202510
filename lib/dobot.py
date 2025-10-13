@@ -247,8 +247,8 @@ class DobotRobot(Robot):
         [x, y, z, rx, ry, rz] = self.get_XYZrxryrz_state()
         print("x, y, z, rx, ry, rz:", x, y, z, rx, ry, rz)
         T = np.eye(4)
-        T[:3, 3] = [x, y, z] # 位置 (mm)
-        rot_matrix = Rotation.from_euler('xyz', [rx, ry, rz], degrees=True).as_matrix()
+        T[:3, 3] = [x / 1000.0, y / 1000.0, z / 1000.0] # 位置 (mm)
+        rot_matrix = Rotation.from_euler('XYZ', [rx, ry, rz], degrees=True).as_matrix()
         T[:3, :3] = rot_matrix
         
         return T

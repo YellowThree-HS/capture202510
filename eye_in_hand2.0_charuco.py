@@ -185,8 +185,8 @@ def main(use_camera=True):
     
     # ==================== 键盘控制参数 ====================
     # 移动步长（毫米和度）
-    pos_step = 100.0   # 位置步长 10mm
-    rot_step = 20.0    # 旋转步长 5度
+    pos_step = 50.0   # 位置步长 10mm
+    rot_step = 10.0    # 旋转步长 5度
     pos_step_fine = 1.0   # 精细位置步长 1mm
     rot_step_fine = 1.0   # 精细旋转步长 1度
     
@@ -231,6 +231,7 @@ def main(use_camera=True):
             if marker_ids is not None:
                 for i in range(len(marker_ids)):
                     rvec = rvecs[i][0]
+                    
                     tvec = tvecs[i][0]
                     cv2.drawFrameAxes(image_copy, camera_matrix, distortion_coefficients, rvec, tvec, 0.05) # 轴的长度为 5cm
 
@@ -363,7 +364,7 @@ def main(use_camera=True):
                     
                     min_value = min(std_min)
                     print(f"\n   最佳方法: {list(method.keys())[std_min.index(min_value)]}")
-                    print(f"   最小标准差: {min_value:.6f} mm")
+                    print(f"   最小标准差: {min_value:.6f} m")
                     
                     if len(t_end2base) >= 10 and 0.000001 < min_value < 0.0015:
                         print("\n🎉 标定精度达标！")
