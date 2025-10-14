@@ -1,18 +1,18 @@
 import numpy as np
 import cv2
-import cv2.aruco as aruco
 import os
 import csv
 # import pupil_apriltags as apriltag
+# from utils import frame_to_bgr_image
 import transforms3d as tfs
 import math
 import random
 import time
-
+# import OrbbecCamera
+# import robot_controller
 
 from lib.dobot import DobotRobot
 from lib.camera import Camera
-
 
 
 def convert_euler_to_rotation_matrix(x, y, z, rx, ry, rz):
@@ -111,39 +111,20 @@ def hand_eye_calibration(
 
     return calibrate_mean, calibrate_std, M_cam2end
 
-
-def enhance_image_for_detection(image):
-    """
-    图像预处理，提高 AprilTag 检测稳定性
-    """
-    # 1. 转灰度
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image.copy()
-    
-    # 2. 直方图均衡化（改善光照）
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(gray)
-    
-    # 3. 双边滤波（保留边缘的同时降噪）
-    denoised = cv2.bilateralFilter(enhanced, 9, 75, 75)
-    
-    # 4. 锐化（可选，增强边缘）
-    kernel = np.array([[-1,-1,-1],
-                       [-1, 9,-1],
-                       [-1,-1,-1]])
-    sharpened = cv2.filter2D(denoised, -1, kernel)
-    
-    return sharpened
-
-
 def main(use_camera=True):
     """
     Main function to run the camera and robot control loop.
     """
     np.set_printoptions(suppress=True)
-
+    # Auboi5Robot.initialize()
+    # robot = robot_controller.URRobot()
+    # handle = robot.create_context()
+    # robot.connect('192.168.1.137', 8899)
+    robot = DobotRobot("192.168.5.1", no_gripper=True)
+    # 运动到初始位姿
+    init_joint_positions = np.array([-90.0, 0.0, -90.0, 0.0, 90.0, 90.0, 1.0])
+    robot.moveJ(init_joint_positions)
+    
     # cam=OrbbecCamera.OrbbecCamera(device_index=0)
     cam =  Camera(camera_model='d405')
     camera_matrix = cam.get_camera_matrix('color')
@@ -151,25 +132,30 @@ def main(use_camera=True):
     image_id = 0
     calibration_path = './Calibration_Pic/'
     os.makedirs(calibration_path, exist_ok=True)
-    robot = DobotRobot("192.168.5.1", no_gripper=True)
-    
-    # 运动到初始位姿
-    init_joint_positions = np.array([-90.0, 0.0, -90.0, 0.0, 90.0, 90.0, 1.0])
-    robot.moveJ(init_joint_positions)
-    
+
+    # camera_params = cam.rgb_intrinsic
+    # distortion = cam.rgb_distortion
+    # camera_matrix = np.array([[camera_params.fx, 0, camera_params.cx],
+    #                           [0, camera_params.fy, camera_params.cy],
+    #                           [0, 0, 1]], dtype=np.float64)
+    # distortion_coefficients = np.array([distortion.k1, distortion.k2, distortion.p1,
+                                        # distortion.p2, distortion.k3], dtype=np.float64)
+    camera_matrix = cam.get_camera_matrix()
+    distortion_coefficients = cam.get_distortion_coeffs()
     # 初始化参数
-    # squaresX = 14
-    # squaresY = 9
-    # squareLength = 0.02
-    # markerLength = 0.015
-    # aruco_type = cv2.aruco.DICT_5X5_1000
+    squaresX = 14
+    squaresY = 9
+    squareLength = 0.02
+    markerLength = 0.015
+    aruco_type = cv2.aruco.DICT_5X5_1000
     
-    # 创建字典和标定板对象
-    # dictionary = cv2.aruco.getPredefinedDictionary(aruco_type)
-    # board = cv2.aruco.CharucoBoard((squaresX, squaresY), squareLength, markerLength, dictionary)
-    # aruco_detector = cv2.aruco.ArucoDetector(dictionary, aruco_params)
-    aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_APRILTAG_36H11)
+    # 创建字典和标定板对象[17](@ref)
+    dictionary = cv2.aruco.getPredefinedDictionary(aruco_type)
+    board = cv2.aruco.CharucoBoard((squaresX, squaresY), squareLength, markerLength, dictionary)
+
+    # 创建检测器对象（新版API）[6](@ref)
     aruco_params = cv2.aruco.DetectorParameters()
+    aruco_detector = cv2.aruco.ArucoDetector(dictionary, aruco_params)
 
     # Lists to store transformation data
     robot_transforms, camera_transforms = [], []
@@ -178,12 +164,12 @@ def main(use_camera=True):
     M_cam2end = np.eye(4)
     method={
         "TSAI":cv2.CALIB_HAND_EYE_TSAI,
+        # "ANDREFF":cv2.CALIB_HAND_EYE_ANDREFF,
         "PARK":cv2.CALIB_HAND_EYE_PARK,
         "DANIILIDIS":cv2.CALIB_HAND_EYE_DANIILIDIS,
         "HORAUD":cv2.CALIB_HAND_EYE_HORAUD,
     }
     
-    # ==================== 键盘控制参数 ====================
     # 移动步长（毫米和度）
     pos_step = 50.0   # 位置步长 10mm
     rot_step = 10.0    # 旋转步长 5度
@@ -192,54 +178,43 @@ def main(use_camera=True):
     
     fine_mode = False  # 精细调整模式
     
-    print("\n" + "="*70)
-    print("🎮 键盘控制手眼标定程序")
-    print("="*70)
-    print("\n📋 控制说明:")
-    print("  位置控制 (相对于当前位置):")
-    print("    ↑/↓    : Y轴 前进/后退")
-    print("    ←/→    : X轴 左移/右移")
-    print("    W/S    : Z轴 上升/下降")
-    print("\n  姿态控制:")
-    print("    Q/E    : 绕Z轴旋转 (Rz)")
-    print("    A/D    : 绕X轴旋转 (Rx)")
-    print("    Z/C    : 绕Y轴旋转 (Ry)")
-    print("\n  功能键:")
-    print("    Space  : 采集当前位姿数据")
-    print("    R      : 回到初始位姿")
-    print("    F      : 切换精细/粗调模式 (当前: 粗调)")
-    print("    P      : 显示当前位姿")
-    print("    H      : 显示帮助信息")
-    print("    ESC    : 退出程序")
-    print("="*70 + "\n")
-    
     try:
         while True:
-            color_image, _ = cam.get_frames()
-
+            try:
+                color_image, _ = cam.get_frames()
+            except Exception as e:
+                print(e)
+                continue
             undistorted_image = cv2.undistort(color_image, camera_matrix, distortion_coefficients)
-            # marker_corners, marker_ids, rejected = aruco_detector.detectMarkers(undistorted_image)
-            gray = enhance_image_for_detection(color_image)
-            # cv2.imshow('gray',gray)
-            marker_corners, marker_ids, rejected = aruco.detectMarkers(gray, aruco_dict, parameters=aruco_params)
-
+            marker_corners, marker_ids, rejected = aruco_detector.detectMarkers(undistorted_image)
             image_copy = color_image.copy()
-            
-            markerLength = 0.08 # 示例：假设标记的边长为 9 厘米 (0.05米)
-            rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers(marker_corners, markerLength, camera_matrix, distortion_coefficients)
-            # 遍历所有检测到的 marker
-            if marker_ids is not None:
-                for i in range(len(marker_ids)):
-                    rvec = rvecs[i][0]
-                    
-                    tvec = tvecs[i][0]
-                    cv2.drawFrameAxes(image_copy, camera_matrix, distortion_coefficients, rvec, tvec, 0.05) # 轴的长度为 5cm
 
+            # 处理检测结果
+            charuco_corners = []
+            charuco_ids = []
+            interpolated_corners = 0
 
-            # 显示图像
-            cv2.imshow('Hand-Eye Calibration (Press H for help)', image_copy)
+            if marker_ids is not None and len(marker_ids) > 0:
+                # 插值ChArUco角点[17](@ref)
+                charuco_detector = cv2.aruco.CharucoDetector(board)
+                charuco_corners, charuco_ids, _, _ = charuco_detector.detectBoard(undistorted_image)
+                
+                interpolated_corners = 0 if charuco_corners is None else len(charuco_corners)
+                retval, rvec, tvec = cv2.aruco.estimatePoseCharucoBoard(charuco_corners, 
+                                                                        charuco_ids, 
+                                                                        board, 
+                                                                        camera_matrix, 
+                                                                        distortion_coefficients, None, None)
+                
+                # print("tvec", tvec)
+                
+                if rvec is not None and tvec is not None:
+                    cv2.drawFrameAxes(image_copy, camera_matrix, distortion_coefficients, rvec, tvec, length=0.03)
+
+            # 保存并显示结果
+            cv2.imshow('Orbbec Camera', image_copy)
+            key = cv2.waitKey(1)
             
-            key = cv2.waitKey(1) & 0xFF
             # ==================== 键盘控制 ====================
             if key == 255:  # 无按键
                 continue
@@ -314,121 +289,57 @@ def main(use_camera=True):
                     robot.moveL(original_pose)
                     # time.sleep(0.5)
             
-            # ==================== 功能键 ====================
-            # 采集数据
-            elif key == 32:  # Space
-                if rvec is None or tvec is None:
-                    print("⚠️ 未检测到标定板，请调整位姿后再采集！")
-                    continue
-                
-                print(f"\n{'='*50}")
-                print(f"📸 采集第 {image_id + 1} 组数据...")
-                
-                # 保存数据
+            if key == ord("r") or key == ord("R"):
+                robot.moveJ(init_joint_positions)
+            
+            if key == 32:  # Space bar to capture data
+                # robot_pose = robot.get_pose_axis()
+                # print(robot_pose)
                 R_charuco_to_camera, _ = cv2.Rodrigues(rvec)
                 M_board2camera = np.eye(4)
                 M_board2camera[:3, :3] = R_charuco_to_camera
                 M_board2camera[:3, 3] = tvec.flatten()
-                
-                M_end2base = robot.get_pose_matrix()
-                
+
+                print(f"Saved data for image {image_id}")
+                image_id += 1
+
+                # # Convert poses to transformation matrices
                 R_board2camera.append(M_board2camera[:3, :3])
                 t_board2camera.append(M_board2camera[:3, 3])
+
+                M_end2base = robot.get_pose_matrix()
                 R_end2base.append(M_end2base[:3, :3])
                 t_end2base.append(M_end2base[:3, 3])
-                
-                print(f"✅ 已保存第 {image_id + 1} 组数据")
-                print(f"   末端位置: {M_end2base[:3, 3]}")
-                image_id += 1
-                
-                # 执行标定计算
-                if len(t_end2base) > 3:
-                    std_min = []
-                    M_list = []
-                    print(f"\n🔧 执行手眼标定 (已采集 {len(t_end2base)} 组数据)...")
-                    
-                    for calib_name, calib_method in method.items():
-                        try:
-                            calib_mean, calib_std, M = hand_eye_calibration(
-                                R_end2base, t_end2base, 
-                                R_board2camera, t_board2camera, 
-                                calib_method
-                            )
-                            print(f"   {calib_name:12s}: 标准差 = {calib_std:.6f} mm")
-                            M_list.append(M)
-                            std_min.append(calib_std)
-                        except Exception as e:
-                            print(f"   {calib_name:12s}: 计算失败 - {e}")
-                            M_list.append(None)
-                            std_min.append(float('inf'))
-                    
-                    min_value = min(std_min)
-                    print(f"\n   最佳方法: {list(method.keys())[std_min.index(min_value)]}")
-                    print(f"   最小标准差: {min_value:.6f} m")
-                    
-                    if len(t_end2base) >= 10 and 0.000001 < min_value < 0.0015:
-                        print("\n🎉 标定精度达标！")
-                        break
-                
-                print(f"{'='*50}\n")
-            
-            # 回到初始位姿
-            elif key == ord('r') or key == ord('R'):
-                print("\n🔄 回到初始位姿...")
-                robot.moveJ(init_joint_positions)
-                # time.sleep(2.0)
-                print("✅ 已回到初始位姿\n")
-            
-            # 切换精细/粗调模式
-            elif key == ord('f') or key == ord('F'):
-                fine_mode = not fine_mode
-                mode = "精细" if fine_mode else "粗调"
-                print(f"\n🔧 切换到{mode}模式")
-                print(f"   位置步长: {pos_step_fine if fine_mode else pos_step}mm")
-                print(f"   旋转步长: {rot_step_fine if fine_mode else rot_step}°\n")
-            
-            # 显示当前位姿
-            elif key == ord('p') or key == ord('P'):
-                curr_pose = robot.get_XYZrxryrz_state()
-                print("\n📍 当前位姿:")
-                print(f"   位置: X={curr_pose[0]:.2f}, Y={curr_pose[1]:.2f}, Z={curr_pose[2]:.2f} mm")
-                print(f"   姿态: Rx={curr_pose[3]:.2f}, Ry={curr_pose[4]:.2f}, Rz={curr_pose[5]:.2f} °\n")
-            
-            # 显示帮助
-            elif key == ord('h') or key == ord('H'):
-                print("\n" + "="*70)
-                print("📋 键盘控制说明:")
-                print("  位置: ↑↓←→ (XY平面), W/S (Z轴)")
-                print("  姿态: Q/E (Rz), A/D (Rx), Z/C (Ry)")
-                print("  功能: Space(采集) R(回原位) F(切换模式) P(显示位姿) ESC(退出)")
-                print("="*70 + "\n")
-            
-            # 退出
-            elif key == 27:  # ESC
-                print("\n❌ 用户终止程序")
-                break
 
+                if len(t_end2base) > 5:
+                    std_min=[]
+                    M_list=[]
+                    for calib_name,calib_method in method.items():
+                        print("Calibration method:",calib_name)
+                        breakpoint()
+                        calib_mean, calib_std, M = hand_eye_calibration(R_end2base, t_end2base, R_board2camera, t_board2camera,calib_method)
+                        print("mean:",calib_mean[:3, 3].T)
+                        M_list.append(M)
+                        std_min.append(calib_std)
+                    print(M_list)
+                    min_value = min(std_min)
+                    print("min_value:",min_value)
+                    if len(t_end2base) > 10 and 0.000001< min_value < 0.0015:
+                        break
+
+            elif key == 27:  # ESC to exit
+                print("Program terminated")
+                break
     except Exception as e:
-        print(f"\n❌ 发生错误: {e}")
-        import traceback
-        traceback.print_exc()
-        
+        print('e:',e)
     finally:
-        if len(t_end2base) > 0:
-            print(f"\n{'='*70}")
-            print("💾 保存标定结果...")
-            print(std_min)
-            min_value = min(std_min)
-            calib_mean = list(method.keys())[std_min.index(min_value)]
-            best_M = M_list[std_min.index(min_value)]
-            print(f"最佳标定方法: {calib_mean}")
-            print(f"最小标准差: {min_value:.6f} mm")
-            print("\n相机到末端的变换矩阵:")
-            print(best_M)
-            np.savetxt("T_camera2end.txt", best_M)
-            print("✅ 已保存到 T_camera2end.txt")
-            print(f"{'='*70}\n")
-        
+        calib_mean=list(method.keys())[std_min.index(min_value)]
+        best_M = M_list[std_min.index(min_value)]
+        print("------------------------calib_mean:",calib_mean,"------------------------")
+        print(best_M)
+        np.savetxt("T_camera2end.txt", best_M)
+        save_calibration_data(calibration_path, camera_transforms, robot_transforms)
+        # 保存变换矩阵到文件
         cv2.destroyAllWindows()
 
 def draw_axis_on_image(image, tag, rvec, tvec, camera_matrix, distortion_coefficients):

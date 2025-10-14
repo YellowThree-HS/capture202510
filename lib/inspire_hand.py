@@ -1,4 +1,4 @@
-from inspire_hand_sdk import write6, openSerial
+from lib.inspire_hand_sdk import write6, openSerial
 import time
 
 class InspireHand:

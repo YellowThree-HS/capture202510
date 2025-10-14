@@ -155,6 +155,7 @@ class DobotRobot(Robot):
         assert not self.robot_is_err, f"{self.robot_ip}: error!"
         tic = time.time()
         self.robot.MovL(pose[0], pose[1], pose[2], pose[3], pose[4], pose[5])
+        self.robot.Sync()
         toc = time.time()
 
 
@@ -174,6 +175,7 @@ class DobotRobot(Robot):
                              robot_joints[3],
                              robot_joints[4],
                              robot_joints[5])
+        self.robot.Sync()
         toc = time.time()
         if self._use_gripper:
             tic = time.time()
@@ -250,7 +252,9 @@ class DobotRobot(Robot):
         T[:3, 3] = [x / 1000.0, y / 1000.0, z / 1000.0] # 位置 (mm)
         rot_matrix = Rotation.from_euler('XYZ', [rx, ry, rz], degrees=True).as_matrix()
         T[:3, :3] = rot_matrix
-        
+        # print("convert to matrix T:", T)
+        # rot_matrix = Rotation.from_euler('XYZ', [np.deg2rad(rx), np.deg2rad(ry), np.deg2rad(rz)]).as_matrix()
+        # print("convert to matrix T:", T)
         return T
 
 

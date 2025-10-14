@@ -616,6 +616,7 @@ if __name__ == "__main__":
     color, depth = cam.get_frames()
     # realtime
     while True:
+        breakpoint()
         color, depth = cam.get_frames()
         if color is not None:
             cv2.imshow("Color", color)
