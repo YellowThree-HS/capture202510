@@ -137,7 +137,6 @@ class YOLOSegmentator:
             mask = sam_results[0].masks.data[0].cpu().numpy().astype(np.uint8)
 
 
-
         # 保存分割结果
         if save_result:
             seg_output_filename = os.path.join(output_dir, f"seg_{os.path.basename(image) if isinstance(image, str) else 'cam.png'}")

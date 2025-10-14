@@ -35,9 +35,9 @@ CAMERA_CONFIGS = {
         'description': 'Intel RealSense D415'
     },
     'D405': {
-        'color': {'width': 640, 'height': 480, 'fps': 30, 'format': rs.format.bgr8},
-        'depth': {'width': 640, 'height': 480, 'fps': 30, 'format': rs.format.z16},
-        'description': 'Intel RealSense D405 (微型近距离相机)'
+        'color': {'width': 1280, 'height': 720, 'fps': 30, 'format': rs.format.bgr8},
+        'depth': {'width': 1280, 'height': 720, 'fps': 30, 'format': rs.format.z16},
+        'description': 'Intel RealSense D405'
     },
     'L515': {
         'color': {'width': 1920, 'height': 1080, 'fps': 30, 'format': rs.format.bgr8},

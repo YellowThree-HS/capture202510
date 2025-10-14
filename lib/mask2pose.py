@@ -9,7 +9,7 @@
 import numpy as np
 import open3d as o3d
 from scipy.spatial.transform import Rotation as R
-
+import cv2
 
 def create_point_cloud(depth_image, intrinsics, color_image):
     """
@@ -31,8 +31,25 @@ def create_point_cloud(depth_image, intrinsics, color_image):
     
     # 过滤无效深度值
     valid_depth = depth_image.copy().astype(float)
-    valid_depth[depth_image > 3.5] = 0
-    valid_depth[depth_image < 0.1] = 0
+    
+    # 统计各范围的深度值 (放宽阈值)
+    too_far = np.sum(depth_image > 10.0)  # 调整为10米
+    too_close = np.sum((depth_image > 0) & (depth_image < 0.01))  # 调整为1cm
+    valid_range = np.sum((depth_image >= 0.01) & (depth_image <= 10.0))
+    
+    
+    valid_depth[depth_image > 10.0] = 0
+    valid_depth[depth_image < 0.01] = 0
+    
+    valid_pixels = np.sum(valid_depth > 0)
+    print(f"  过滤后有效像素: {valid_pixels}")
+    
+    if valid_pixels == 0:
+        print(f"  ❌ 警告: 没有有效的深度数据!")
+        print(f"  可能原因:")
+        print(f"    1. 深度值全为0 (掩码区域没有深度信息)")
+        print(f"    2. 深度值超出范围 (需要调整阈值)")
+        print(f"    3. 深度图单位不对 (应该是米)")
     
     # 计算3D坐标
     z = valid_depth
@@ -47,6 +64,12 @@ def create_point_cloud(depth_image, intrinsics, color_image):
     valid_mask = (z.reshape(-1) > 0)
     points = points[valid_mask]
     colors = colors[valid_mask]
+    
+    # print(f"  最终点云数量: {len(points)}")
+    # if len(points) > 0:
+    #     print(f"  点云范围: X[{points[:, 0].min():.3f}, {points[:, 0].max():.3f}], "
+    #           f"Y[{points[:, 1].min():.3f}, {points[:, 1].max():.3f}], "
+    #           f"Z[{points[:, 2].min():.3f}, {points[:, 2].max():.3f}]")
     
     # 创建点云
     pcd = o3d.geometry.PointCloud()
@@ -448,11 +471,65 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
         T: 4x4变换矩阵
     """
     try:
+        # 0. 确保mask尺寸与图像匹配(双保险)
+        h, w = color_image.shape[:2]
+        mask_h, mask_w = mask.shape[:2]
+        
+        # cv2.imwrite("Mask.png", mask*255)
+        
+        
+        if (mask_h, mask_w) != (h, w):
+            print(f"  ⚠️ [mask2pose] 调整mask尺寸: ({mask_h}, {mask_w}) -> ({h}, {w})")
+            mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)         
+        
         # 1. 根据掩码提取点云
-        color_masked = color_image * mask[:, :, np.newaxis]
-        depth_masked = depth_image * mask
+        # 确保mask是2D的 (H, W)
+        mask_2d = mask[:, :, 0] if len(mask.shape) == 3 else mask
+        # 确保depth是2D的 (H, W)
+        depth_2d = depth_image[:, :, 0] if len(depth_image.shape) == 3 else depth_image
+        
+        # 调试信息:检查掩码和深度数据
+        # print(f"\n[mask2pose] 掩码和深度数据检查:")
+        # print(f"  mask_2d shape: {mask_2d.shape}, dtype: {mask_2d.dtype}")
+        # print(f"  mask_2d range: [{mask_2d.min():.3f}, {mask_2d.max():.3f}]")
+        # print(f"  mask非零像素数: {np.count_nonzero(mask_2d)}/{mask_2d.size}")
+        # print(f"  depth_2d shape: {depth_2d.shape}, dtype: {depth_2d.dtype}")
+        # print(f"  depth_2d range: [{depth_2d.min():.3f}, {depth_2d.max():.3f}]")
+        
+        # 应用掩码
+        color_masked = color_image * mask_2d[:, :, np.newaxis]
+        depth_masked = depth_2d * mask_2d
+        
+        # 检查掩码区域的深度值
+        masked_depth_values = depth_masked[mask_2d > 0]
+        if len(masked_depth_values) > 0:
+            print(f"  掩码区域深度值: [{masked_depth_values.min():.3f}, {masked_depth_values.max():.3f}]")
+            print(f"  掩码区域平均深度: {masked_depth_values.mean():.3f}m")
+            print(f"  掩码区域有效深度点数: {np.sum((masked_depth_values > 0.1) & (masked_depth_values < 3.5))}")
+        else:
+            print(f"  ❌ 警告: 掩码区域没有像素!")
+
+        # # 确保深度图是uint16格式(单位:毫米)
+        # if depth_image.dtype == np.float32:
+        #     # 如果是米为单位,转换为毫米的uint16
+        #     depth_uint16 = (depth_image * 1000).astype(np.uint16)
+        # else:
+        #     depth_uint16 = depth_image.astype(np.uint16)
+
+        # # 保存为16位PNG
+        # cv2.imwrite("depth.png", depth_uint16)
+        # print("深度图已保存为16位PNG")
+
+        cv2.imwrite('color_mask.png',color_masked)
+        
+        # 保存深度掩码图(用于调试)
+        if depth_masked.max() > 0:
+            depth_vis = cv2.normalize(depth_masked, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+            cv2.imwrite('depth_mask.png', depth_vis)
         
         point_cloud = create_point_cloud(depth_masked, intrinsics, color_masked)
+        
+        # o3d.visualization.draw_geometries([point_cloud], window_name="Masked Point Cloud")
         
         if len(point_cloud.points) < 50:
             print("❌ 点云数据太少，无法估计位姿")
