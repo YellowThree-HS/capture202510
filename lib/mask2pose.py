@@ -469,6 +469,7 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
     返回:
         pose: [x, y, z, roll, pitch, yaw] 在基坐标系中的位姿
         T: 4x4变换矩阵
+    # 得到pose基于相机的座标
     """
     try:
         # 0. 确保mask尺寸与图像匹配(双保险)
@@ -488,13 +489,7 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
         # 确保depth是2D的 (H, W)
         depth_2d = depth_image[:, :, 0] if len(depth_image.shape) == 3 else depth_image
         
-        # 调试信息:检查掩码和深度数据
-        # print(f"\n[mask2pose] 掩码和深度数据检查:")
-        # print(f"  mask_2d shape: {mask_2d.shape}, dtype: {mask_2d.dtype}")
-        # print(f"  mask_2d range: [{mask_2d.min():.3f}, {mask_2d.max():.3f}]")
-        # print(f"  mask非零像素数: {np.count_nonzero(mask_2d)}/{mask_2d.size}")
-        # print(f"  depth_2d shape: {depth_2d.shape}, dtype: {depth_2d.dtype}")
-        # print(f"  depth_2d range: [{depth_2d.min():.3f}, {depth_2d.max():.3f}]")
+
         
         # 应用掩码
         color_masked = color_image * mask_2d[:, :, np.newaxis]
@@ -509,24 +504,12 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
         else:
             print(f"  ❌ 警告: 掩码区域没有像素!")
 
-        # # 确保深度图是uint16格式(单位:毫米)
-        # if depth_image.dtype == np.float32:
-        #     # 如果是米为单位,转换为毫米的uint16
-        #     depth_uint16 = (depth_image * 1000).astype(np.uint16)
-        # else:
-        #     depth_uint16 = depth_image.astype(np.uint16)
 
-        # # 保存为16位PNG
-        # cv2.imwrite("depth.png", depth_uint16)
-        # print("深度图已保存为16位PNG")
-
-        cv2.imwrite('color_mask.png',color_masked)
         
         # 保存深度掩码图(用于调试)
         if depth_masked.max() > 0:
             depth_vis = cv2.normalize(depth_masked, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            cv2.imwrite('depth_mask.png', depth_vis)
-        
+  
         point_cloud = create_point_cloud(depth_masked, intrinsics, color_masked)
         
         # o3d.visualization.draw_geometries([point_cloud], window_name="Masked Point Cloud")
@@ -614,6 +597,20 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
         traceback.print_exc()
         return None, None
 
+
+def draw_pose_axes(image, intrinsics, pose_matrix, axis_length=0.05):
+    # 提取旋转和平移
+    R = pose_matrix[:3, :3]
+    t = pose_matrix[:3, 3]
+    # 转为OpenCV格式
+    rvec, _ = cv2.Rodrigues(R)
+    tvec = t.reshape(3, 1)
+    # 绘制坐标轴
+    cv2.drawFrameAxes(image, intrinsics, np.zeros(5), rvec, tvec, axis_length)
+    cv2.imshow("Pose Visualization", image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    return image
 
 def visualize_result(color_image, depth_image, T_cam2base, intrinsics, pose):
     """

@@ -95,7 +95,8 @@ class YOLOSegmentator:
         #保存结果
         if save_result:
              # 保存检测结果（带标签的检测框）
-            det_output_filename = os.path.join(output_dir, f"det_{os.path.basename(image) if isinstance(image, str) else 'cam.png'}")
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            det_output_filename = os.path.join(output_dir, f"det_{os.path.basename(image) if isinstance(image, str) else f'{timestamp}.png'}")
             result.save(det_output_filename)
             print('YOLO-World results:')
             print(f"Detection result saved to {det_output_filename}")
@@ -139,7 +140,8 @@ class YOLOSegmentator:
 
         # 保存分割结果
         if save_result:
-            seg_output_filename = os.path.join(output_dir, f"seg_{os.path.basename(image) if isinstance(image, str) else 'cam.png'}")
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            seg_output_filename = os.path.join(output_dir, f"seg_{os.path.basename(image) if isinstance(image, str) else f'{timestamp}.png'}")
             sam_results[0].save(seg_output_filename)
             print('FastSAM results:')
             print(f"Segmentation result saved to {seg_output_filename}")
@@ -199,7 +201,7 @@ class YOLOSegmentator:
             'segmentation_path': seg_result.get('segmentation_path') if save_result else None
         }
     
-    def detect_and_segment_all(self, image, categories, output_dir="./result", conf=0.1, imgsz=640, save_result=True, 
+    def detect_and_segment_all(self, image, categories, output_dir="./result", conf=0.1, imgsz=640, save_result=False, 
                                multi_instance_classes=None, multi_conf_threshold=0.3, multi_max_count=3):
         """
         检测并分割所有指定类别的物体

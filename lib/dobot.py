@@ -247,10 +247,11 @@ class DobotRobot(Robot):
         """
         
         [x, y, z, rx, ry, rz] = self.get_XYZrxryrz_state()
-        print("x, y, z, rx, ry, rz:", x, y, z, rx, ry, rz)
+        # print("x, y, z, rx, ry, rz:", x, y, z, rx, ry, rz)
         T = np.eye(4)
         T[:3, 3] = [x / 1000.0, y / 1000.0, z / 1000.0] # 位置 (mm)
-        rot_matrix = Rotation.from_euler('XYZ', [rx, ry, rz], degrees=True).as_matrix()
+        rot_matrix = Rotation.from_euler('xyz', [rx, ry, rz], degrees=True).as_matrix()
+        # breakpoint()
         T[:3, :3] = rot_matrix
         # print("convert to matrix T:", T)
         # rot_matrix = Rotation.from_euler('XYZ', [np.deg2rad(rx), np.deg2rad(ry), np.deg2rad(rz)]).as_matrix()
@@ -262,8 +263,8 @@ class DobotRobot(Robot):
 def main():
     dobot = DobotRobot("192.168.5.1", no_gripper=False)
     print(dobot.r_inter.GetPose())
-    pose = np.array([-95.022476,-392.278442,344.093872,165.906189,9.096970,45.669773])
-    dobot.moveL(pose)
+    # pose = np.array([-95.022476,-392.278442,344.093872,165.906189,9.096970,45.669773])
+    # dobot.moveL(pose)
     print(dobot.r_inter.GetPose())
     print(dobot.get_pose_matrix())
 
