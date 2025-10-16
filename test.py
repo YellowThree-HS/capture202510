@@ -49,10 +49,14 @@ def detect_aruco_pose(camera,image):
         tvec = tvecs[0][0]
         success = True
     else:
-        # 对于多个标记，尝试估计板子位姿
-        success, rvec, tvec = cv2.aruco.estimatePoseBoard(
-            corners, ids, board, camera_matrix, dist_coeffs, None, None
+        # 对于多个标记，暂时只处理第一个标记
+        # TODO: 实现真正的板子位姿估计
+        rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+            corners[:1], marker_size, camera_matrix, dist_coeffs
         )
+        rvec = rvecs[0][0]
+        tvec = tvecs[0][0]
+        success = True
 
     
     aruco_to_cam = np.eye(4)
@@ -73,14 +77,14 @@ def main():
     
     
     # # 读取原始图像
-    # color_image_path = 'test/color.png'
-    # depth_image_path = 'test/depth.png'
-    # color_image = cv2.imread(color_image_path)
-    # depth_image = cv2.imread(depth_image_path, cv2.IMREAD_UNCHANGED)
-    color_image, depth_image = cam.get_frames()
-    cv2.imwrite('test/color.png',color_image)
-    cv2.imwrite('test/depth.png',depth_image)
-    return 0
+    color_image_path = 'test/color.png'
+    depth_image_path = 'test/depth.png'
+    color_image = cv2.imread(color_image_path)
+    depth_image = cv2.imread(depth_image_path, cv2.IMREAD_UNCHANGED)
+    # color_image, depth_image = cam.get_frames()
+    # cv2.imwrite('test/color.png',color_image)
+    # cv2.imwrite('test/depth.png',depth_image)
+    # return 0
 
     # 确保深度图是二维的
     if len(depth_image.shape) == 3:
@@ -99,16 +103,36 @@ def main():
     categories_to_find = ['cup']
     segmentator = YOLOSegmentator()
     
+    # 打印图像信息用于调试
+    print(f"\n🔍 图像信息:")
+    print(f"  图像尺寸: {color_image.shape}")
+    print(f"  数据类型: {color_image.dtype}")
+    print(f"  检测类别: {categories_to_find}")
+    
     # 使用调整后的图像进行检测
     result = segmentator.detect_and_segment_all(
         image=color_image,
         categories=categories_to_find,
-        save_result=False
+        save_result=False,
+        conf=0.1  # 降低置信度阈值，从0.1降到0.051
     )
 
     # result['objects']是一个字典的list，每个字典代表一个物体包含类别、置信度、边界框和掩码
 
     intrinsics = cam.get_camera_matrix()
+    
+    # 检查检测是否成功
+    if not result['success']:
+        print("❌ 检测失败：没有检测到任何物体")
+        print("可能的原因：")
+        print("1. 图像中没有 'cup' 物体")
+        print("2. 物体置信度太低（当前阈值: 0.1）")
+        print("3. 图像质量问题")
+        return
+    
+    if 'objects' not in result or len(result['objects']) == 0:
+        print("❌ 没有检测到任何物体")
+        return
     
     for idx, obj in enumerate(result['objects']):
         print(f"\n物体 {idx + 1}:")

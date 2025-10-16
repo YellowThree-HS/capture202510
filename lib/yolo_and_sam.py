@@ -1,5 +1,5 @@
 import torch
-from ultralytics import YOLOWorld, FastSAM
+from ultralytics import YOLOWorld, FastSAM, SAM
 import numpy as np
 import time
 import os
@@ -28,12 +28,18 @@ def timer(func):
 
 
 class YOLOSegmentator:
-    def __init__(self, yolo_weights="weights/yolov8s-world.pt", sam_weights="weights/FastSAM-s.pt"):
+    def __init__(self, yolo_weights="weights/yolov8s-world.pt", sam_weights="weights/sam2.1_b.pt", use_sam2=True):
         """
-        正确初始化 YOLO-World 和 FastSAM 模型。
+        初始化 YOLO-World 和 SAM 模型。
+        
+        参数:
+            yolo_weights: YOLO模型权重路径
+            sam_weights: SAM模型权重路径
+            use_sam2: 是否使用SAM2.1，否则使用FastSAM
         """
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         print(f"Using device: {self.device}")
+        self.use_sam2 = use_sam2
 
         # --- 正确的 YOLO-World 初始化流程 ---
 
@@ -42,10 +48,14 @@ class YOLOSegmentator:
         self.det_model = YOLOWorld(yolo_weights)
         self.det_model.to(self.device)
 
-        # 加载 FastSAM 模型
-        print("Loading FastSAM model...")
-        self.seg_model = FastSAM(sam_weights)
-        self.seg_model.to(self.device)
+        # 加载 SAM 模型
+        if self.use_sam2:
+            print("Loading SAM2.1 model...")
+            self.seg_model = SAM(sam_weights)
+        else:
+            print("Loading FastSAM model...")
+            self.seg_model = FastSAM(sam_weights)
+            self.seg_model.to(self.device)
 
     @timer
     def detect(self, image, categories, output_dir="result", conf=0.1, imgsz=640, save_result=True):
@@ -110,16 +120,128 @@ class YOLOSegmentator:
 
         return result_dict
 
-    @timer
-    def segment(self, image, bbox_gpu, output_dir, save_result):
+    def _expand_bbox(self, bbox_gpu, expand_pixels, image):
         """
-        使用 FastSAM 对指定边界框进行分割
+        扩展检测框边界
+        
+        参数:
+            bbox_gpu: 原始边界框张量 (格式为 xyxy)
+            expand_pixels: 扩展的像素数
+            image: 图像数据，用于获取图像尺寸
+            
+        返回:
+            bbox_expanded: 扩展后的边界框张量
+        """
+        import torch
+        
+        # 获取图像尺寸
+        if isinstance(image, str):
+            # 如果是图像路径，读取图像获取尺寸
+            import cv2
+            img = cv2.imread(image)
+            h, w = img.shape[:2]
+        else:
+            # 如果是numpy数组
+            h, w = image.shape[:2]
+        
+        # 将GPU张量转换为CPU numpy数组进行处理
+        bbox_cpu = bbox_gpu.cpu().numpy()
+        x1, y1, x2, y2 = bbox_cpu
+        
+        # 扩展边界框
+        x1_expanded = max(0, x1 - expand_pixels)
+        y1_expanded = max(0, y1 - expand_pixels)
+        x2_expanded = min(w, x2 + expand_pixels)
+        y2_expanded = min(h, y2 + expand_pixels)
+        
+        # 转换回GPU张量
+        bbox_expanded = torch.tensor([x1_expanded, y1_expanded, x2_expanded, y2_expanded], 
+                                   device=bbox_gpu.device, dtype=bbox_gpu.dtype)
+        
+        print(f"   检测框扩展: [{x1:.0f}, {y1:.0f}, {x2:.0f}, {y2:.0f}] -> [{x1_expanded:.0f}, {y1_expanded:.0f}, {x2_expanded:.0f}, {y2_expanded:.0f}]")
+        
+        return bbox_expanded
+
+    def _draw_dashed_rectangle(self, img, pt1, pt2, color, thickness, dash_length=10):
+        """
+        绘制虚线矩形
+        
+        参数:
+            img: 图像
+            pt1: 左上角点 (x1, y1)
+            pt2: 右下角点 (x2, y2)
+            color: 颜色
+            thickness: 线条粗细
+            dash_length: 虚线长度
+        """
+        x1, y1 = pt1
+        x2, y2 = pt2
+        
+        # 绘制四条边的虚线
+        # 上边
+        self._draw_dashed_line(img, (x1, y1), (x2, y1), color, thickness, dash_length)
+        # 下边
+        self._draw_dashed_line(img, (x1, y2), (x2, y2), color, thickness, dash_length)
+        # 左边
+        self._draw_dashed_line(img, (x1, y1), (x1, y2), color, thickness, dash_length)
+        # 右边
+        self._draw_dashed_line(img, (x2, y1), (x2, y2), color, thickness, dash_length)
+
+    def _draw_dashed_line(self, img, pt1, pt2, color, thickness, dash_length):
+        """
+        绘制虚线
+        
+        参数:
+            img: 图像
+            pt1: 起点 (x1, y1)
+            pt2: 终点 (x2, y2)
+            color: 颜色
+            thickness: 线条粗细
+            dash_length: 虚线长度
+        """
+        x1, y1 = pt1
+        x2, y2 = pt2
+        
+        # 计算线条长度和方向
+        length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        if length == 0:
+            return
+            
+        # 计算单位方向向量
+        dx = (x2 - x1) / length
+        dy = (y2 - y1) / length
+        
+        # 绘制虚线
+        current_length = 0
+        draw = True
+        
+        while current_length < length:
+            # 计算当前段的起点和终点
+            start_x = int(x1 + current_length * dx)
+            start_y = int(y1 + current_length * dy)
+            
+            end_length = min(current_length + dash_length, length)
+            end_x = int(x1 + end_length * dx)
+            end_y = int(y1 + end_length * dy)
+            
+            if draw:
+                cv2.line(img, (start_x, start_y), (end_x, end_y), color, thickness)
+            
+            current_length = end_length
+            draw = not draw
+
+
+    @timer
+    def segment(self, image, bbox_gpu, output_dir, save_result, expand_pixels=40):
+        """
+        使用 SAM 对指定边界框进行分割
         
         参数:
             image: 图像数据 (numpy 数组格式) | 图片地址
             bbox_gpu: 边界框张量 (在GPU上，格式为 xyxy)
             output_dir: 输出目录
             save_result: 是否保存分割结果
+            expand_pixels: 检测框向外扩展的像素数
             
         返回:
             dict: {
@@ -128,8 +250,18 @@ class YOLOSegmentator:
                 'segmentation_path': str (如果保存了结果)
             }
         """
-
-        sam_results = self.seg_model(image, bboxes=bbox_gpu.unsqueeze(0))
+        
+        # 扩展检测框
+        bbox_expanded = self._expand_bbox(bbox_gpu, expand_pixels, image)
+        
+        if self.use_sam2:
+            # 使用SAM2.1进行分割 (ultralytics接口)
+            bbox_cpu = bbox_expanded.cpu().numpy()
+            x1, y1, x2, y2 = bbox_cpu
+            sam_results = self.seg_model(image, bboxes=[x1, y1, x2, y2])
+        else:
+            # 使用FastSAM进行分割
+            sam_results = self.seg_model(image, bboxes=bbox_expanded.unsqueeze(0))
 
 
         # 提取掩码数据
@@ -142,8 +274,11 @@ class YOLOSegmentator:
         if save_result:
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             seg_output_filename = os.path.join(output_dir, f"seg_{os.path.basename(image) if isinstance(image, str) else f'{timestamp}.png'}")
+            
+            # 使用统一的save方法
             sam_results[0].save(seg_output_filename)
-            print('FastSAM results:')
+            model_name = "SAM2.1" if self.use_sam2 else "FastSAM"
+            print(f'{model_name} results:')
             print(f"Segmentation result saved to {seg_output_filename}")
 
         result_dict = {
@@ -187,7 +322,7 @@ class YOLOSegmentator:
         print(f"\nBest object: {best_class_name} (confidence: {best_confidence:.2f})")
 
         # 步骤2: 分割
-        seg_result = self.segment(image, best_box_gpu, output_dir, save_result=save_result)
+        seg_result = self.segment(image, best_box_gpu, output_dir, save_result=save_result, expand_pixels=40)
 
         return {
             'success': True,
@@ -291,11 +426,21 @@ class YOLOSegmentator:
         
         detected_objects = []
         for info in selected_objects:
+            # 获取原始检测框
+            original_bbox = det_bboxes.xyxy[info['idx']]
+            
+            # 扩展检测框用于分割
+            expanded_bbox = self._expand_bbox(original_bbox, 40, image)
+            
+            # 执行分割
+            seg_result = self.segment(image, original_bbox, output_dir, save_result=save_result, expand_pixels=40)
+            
             obj = {
                 'class': info['class_name'],
                 'confidence': info['confidence'],
-                'bbox_xyxy': det_bboxes.xyxy[info['idx']].cpu().numpy().astype(int).tolist(),
-                'mask': self.segment(image, det_bboxes.xyxy[info['idx']], output_dir, save_result=save_result)['mask']
+                'bbox_xyxy': original_bbox.cpu().numpy().astype(int).tolist(),  # 原始检测框
+                'bbox_xyxy_expanded': expanded_bbox.cpu().numpy().astype(int).tolist(),  # 扩展后的检测框
+                'mask': seg_result['mask']
             }
             detected_objects.append(obj)
             print(f"  Segmented: {info['class_name']} (conf={info['confidence']:.2f})")
@@ -373,12 +518,19 @@ class YOLOSegmentator:
                 # 叠加掩码（透明度0.4）
                 overlay = cv2.addWeighted(overlay, 1, colored_mask, 0.4, 0)
             
-            # 2. 绘制检测框
+            # 2. 绘制原始检测框（细线）
             bbox = obj['bbox_xyxy']
             x1, y1, x2, y2 = map(int, bbox)
             cv2.rectangle(overlay, (x1, y1), (x2, y2), color, 2)
             
-            # 3. 绘制标签背景
+            # 3. 绘制扩展后的检测框（虚线，如果存在）
+            if 'bbox_xyxy_expanded' in obj:
+                bbox_exp = obj['bbox_xyxy_expanded']
+                x1_exp, y1_exp, x2_exp, y2_exp = map(int, bbox_exp)
+                # 绘制虚线矩形（用多个小线段模拟）
+                self._draw_dashed_rectangle(overlay, (x1_exp, y1_exp), (x2_exp, y2_exp), (0, 255, 255), 2)
+            
+            # 4. 绘制标签背景
             label = f"{obj['class']} {obj['confidence']:.2f}"
             font = cv2.FONT_HERSHEY_SIMPLEX
             font_scale = 0.6
@@ -396,7 +548,7 @@ class YOLOSegmentator:
                 -1  # 填充
             )
             
-            # 4. 绘制标签文字（白色）
+            # 5. 绘制标签文字（白色）
             cv2.putText(
                 overlay,
                 label,

@@ -156,12 +156,26 @@ def extract_cup_side_contour(mask, color_image, depth_image, intrinsics):
         mask_2d = mask[:, :, 0] if len(mask.shape) == 3 else mask
         mask_2d = mask_2d.astype(np.uint8)
         
+        # 保存原始掩码用于调试
+        import os
+        from datetime import datetime
+        os.makedirs("result", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        original_mask_path = f"result/mask_original_{timestamp}.png"
+        cv2.imwrite(original_mask_path, mask_2d*255)
+        print(f"🔍 原始掩码已保存: {original_mask_path}")
+        
         # 形态学操作：开运算去除噪点
         kernel = np.ones((3, 3), np.uint8)
-        mask_2d = cv2.morphologyEx(mask_2d, cv2.MORPH_OPEN, kernel)
+        mask_cleaned = cv2.morphologyEx(mask_2d, cv2.MORPH_OPEN, kernel)
+        
+        # 保存清理后的掩码
+        cleaned_mask_path = f"result/mask_cleaned_{timestamp}.png"
+        cv2.imwrite(cleaned_mask_path, mask_cleaned*255)
+        print(f"🔍 清理后掩码已保存: {cleaned_mask_path}")
         
         # 2. 查找轮廓
-        contours, _ = cv2.findContours(mask_2d, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(mask_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         if len(contours) == 0:
             print("❌ 未找到轮廓")
@@ -758,7 +772,14 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
         h, w = color_image.shape[:2]
         mask_h, mask_w = mask.shape[:2]
         
-        # cv2.imwrite("Mask.png", mask*255)
+        # 保存掩码用于调试
+        import os
+        from datetime import datetime
+        os.makedirs("result", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        mask_path = f"result/mask_debug_{timestamp}.png"
+        cv2.imwrite(mask_path, mask*255)
+        print(f"🔍 掩码已保存用于调试: {mask_path}")
         
         
         if (mask_h, mask_w) != (h, w):
