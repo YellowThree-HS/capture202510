@@ -16,7 +16,7 @@ from scipy.spatial.transform import Rotation as R
 
 
 class ArUcoVerification:
-    def __init__(self, calibration_file='best_hand_eye_calibration.npy', robot_ip='192.168.5.1'):
+    def __init__(self, calibration_file='right_calibration.npy', robot_ip='192.168.5.2'):
         """
         初始化ArUco验证系统
         

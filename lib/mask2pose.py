@@ -1,15 +1,26 @@
 """
 物体位姿估计模块
 从掩码和深度图中提取物体的位姿信息
-支持两种方法：
-1. 平面检测法 - 适用于杯子、碗、盒子等有明显顶面的物体
+
+主要功能：
+1. 梯形轮廓法 - 专门用于杯子的侧边轮廓分析
 2. PCA主轴法 - 适用于勺子、刀叉、笔等细长物体
+
+核心函数：
+- mask2pose(): 主要接口，根据物体类别自动选择估计方法
+- create_point_cloud(): 从深度图创建点云
+- extract_elongated_features(): 细长物体特征提取（PCA法）
+- extract_cup_side_contour(): 杯子侧边轮廓提取（梯形轮廓法）
+- calculate_cup_pose_from_trapezoid(): 基于梯形计算杯子3D位姿
+- calculate_cup_pose_from_trapezoid_matrix(): 构建杯子位姿变换矩阵
 """
 
 import numpy as np
 import open3d as o3d
 from scipy.spatial.transform import Rotation as R
 import cv2
+import os
+from datetime import datetime
 
 def create_point_cloud(depth_image, intrinsics, color_image):
     """
@@ -31,25 +42,8 @@ def create_point_cloud(depth_image, intrinsics, color_image):
     
     # 过滤无效深度值
     valid_depth = depth_image.copy().astype(float)
-    
-    # 统计各范围的深度值 (放宽阈值)
-    too_far = np.sum(depth_image > 10.0)  # 调整为10米
-    too_close = np.sum((depth_image > 0) & (depth_image < 0.01))  # 调整为1cm
-    valid_range = np.sum((depth_image >= 0.01) & (depth_image <= 10.0))
-    
-    
     valid_depth[depth_image > 10.0] = 0
     valid_depth[depth_image < 0.01] = 0
-    
-    valid_pixels = np.sum(valid_depth > 0)
-    print(f"  过滤后有效像素: {valid_pixels}")
-    
-    if valid_pixels == 0:
-        print(f"  ❌ 警告: 没有有效的深度数据!")
-        print(f"  可能原因:")
-        print(f"    1. 深度值全为0 (掩码区域没有深度信息)")
-        print(f"    2. 深度值超出范围 (需要调整阈值)")
-        print(f"    3. 深度图单位不对 (应该是米)")
     
     # 计算3D坐标
     z = valid_depth
@@ -65,12 +59,6 @@ def create_point_cloud(depth_image, intrinsics, color_image):
     points = points[valid_mask]
     colors = colors[valid_mask]
     
-    # print(f"  最终点云数量: {len(points)}")
-    # if len(points) > 0:
-    #     print(f"  点云范围: X[{points[:, 0].min():.3f}, {points[:, 0].max():.3f}], "
-    #           f"Y[{points[:, 1].min():.3f}, {points[:, 1].max():.3f}], "
-    #           f"Z[{points[:, 2].min():.3f}, {points[:, 2].max():.3f}]")
-    
     # 创建点云
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
@@ -79,59 +67,19 @@ def create_point_cloud(depth_image, intrinsics, color_image):
     return pcd
 
 
-def extract_cup_features(point_cloud):
-    """
-    提取杯子的几何特征（顶面和中心）
-    
-    参数:
-        point_cloud: 杯子的点云数据
-    
-    返回:
-        center: 杯子中心位置 (x, y, z)
-        normal: 杯子顶面法向量 (nx, ny, nz)
-        radius: 杯口半径（可选）
-    """
-    try:
-        # 1. 使用RANSAC检测平面（杯子顶面）
-        plane_model, inliers = point_cloud.segment_plane(
-            distance_threshold=0.005,
-            ransac_n=3,
-            num_iterations=1000
-        )
-        
-        if len(inliers) < 10:
-            print("⚠️ 检测到的平面点太少")
-            return None, None, None
-        
-        # 2. 提取顶面点云
-        top_surface = point_cloud.select_by_index(inliers)
-        top_points = np.asarray(top_surface.points)
-        
-        # 3. 计算杯子中心（顶面点云的几何中心）
-        center = np.mean(top_points, axis=0)
-        
-        # 4. 提取法向量（指向上方）
-        normal = -plane_model[:3] / np.linalg.norm(plane_model[:3])
-        
-        # 确保法向量指向上方（z方向为正）
-        if normal[2] < 0:
-            normal = -normal
-        
-        # 5. 估计杯口半径（可选）
-        distances = np.linalg.norm(top_points - center, axis=1)
-        radius = np.mean(distances)
-        
-        print(f"🔍 杯子特征提取:")
-        print(f"   中心位置: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}]")
-        print(f"   法向量: [{normal[0]:.3f}, {normal[1]:.3f}, {normal[2]:.3f}]")
-        print(f"   估计半径: {radius:.3f}m ({radius*100:.1f}cm)")
-        
-        return center, normal, radius
-        
-    except Exception as e:
-        print(f"❌ 提取杯子特征时出错: {e}")
-        return None, None, None
-
+def draw_pose_axes(image, intrinsics, pose_matrix, axis_length=0.05):
+    # 提取旋转和平移
+    R = pose_matrix[:3, :3]
+    t = pose_matrix[:3, 3]
+    # 转为OpenCV格式
+    rvec, _ = cv2.Rodrigues(R)
+    tvec = t.reshape(3, 1)
+    # 绘制坐标轴
+    cv2.drawFrameAxes(image, intrinsics, np.zeros(5), rvec, tvec, axis_length)
+    cv2.imshow("Pose Visualization", image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    return image
 
 def extract_cup_side_contour(mask, color_image, depth_image, intrinsics):
     """
@@ -150,35 +98,21 @@ def extract_cup_side_contour(mask, color_image, depth_image, intrinsics):
         success: 是否成功提取
     """
     try:
-        print("🔍 开始提取杯子侧边轮廓...")
-        
         # 1. 预处理掩码
         mask_2d = mask[:, :, 0] if len(mask.shape) == 3 else mask
         mask_2d = mask_2d.astype(np.uint8)
-        
-        # 保存原始掩码用于调试
-        import os
-        from datetime import datetime
-        os.makedirs("result", exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        original_mask_path = f"result/mask_original_{timestamp}.png"
-        cv2.imwrite(original_mask_path, mask_2d*255)
-        print(f"🔍 原始掩码已保存: {original_mask_path}")
         
         # 形态学操作：开运算去除噪点
         kernel = np.ones((3, 3), np.uint8)
         mask_cleaned = cv2.morphologyEx(mask_2d, cv2.MORPH_OPEN, kernel)
         
-        # 保存清理后的掩码
-        cleaned_mask_path = f"result/mask_cleaned_{timestamp}.png"
-        cv2.imwrite(cleaned_mask_path, mask_cleaned*255)
-        print(f"🔍 清理后掩码已保存: {cleaned_mask_path}")
+        # 只保留最大的连通区域（杯子主体）
+        mask_cleaned = keep_largest_connected_component(mask_cleaned)
         
         # 2. 查找轮廓
         contours, _ = cv2.findContours(mask_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         if len(contours) == 0:
-            print("❌ 未找到轮廓")
             return None, None, None, False
         
         # 选择最大的轮廓
@@ -188,43 +122,142 @@ def extract_cup_side_contour(mask, color_image, depth_image, intrinsics):
         epsilon = 0.02 * cv2.arcLength(largest_contour, True)
         approx_contour = cv2.approxPolyDP(largest_contour, epsilon, True)
         
-        print(f"   轮廓点数: {len(largest_contour)} -> 近似后: {len(approx_contour)}")
-        
         # 4. 梯形拟合
         trapezoid_points = fit_trapezoid(approx_contour)
         
         if trapezoid_points is None:
-            print("❌ 梯形拟合失败")
             return None, None, None, False
         
-        print(f"   梯形顶点: {trapezoid_points}")
+        # 4.5. 可视化梯形拟合结果
+        visualize_trapezoid_fitting(color_image, mask_cleaned, largest_contour, 
+                                  approx_contour, trapezoid_points)
         
         # 5. 计算3D位姿
         center_3d, normal_3d = calculate_cup_pose_from_trapezoid(
-            trapezoid_points, depth_image, intrinsics
+            trapezoid_points, depth_image, intrinsics, color_image
         )
         
         if center_3d is None:
-            print("❌ 3D位姿计算失败")
             return None, None, None, False
-        
-        print(f"✅ 杯子侧边轮廓提取成功")
-        print(f"   梯形顶点: {trapezoid_points}")
-        print(f"   3D中心: [{center_3d[0]:.3f}, {center_3d[1]:.3f}, {center_3d[2]:.3f}]")
-        print(f"   向上向量: [{normal_3d[0]:.3f}, {normal_3d[1]:.3f}, {normal_3d[2]:.3f}]")
         
         return trapezoid_points, center_3d, normal_3d, True
         
     except Exception as e:
-        print(f"❌ 提取杯子侧边轮廓时出错: {e}")
-        import traceback
-        traceback.print_exc()
         return None, None, None, False
+
+
+
+
+def visualize_trapezoid_fitting(color_image, mask_cleaned, original_contour, 
+                               approx_contour, trapezoid_points):
+    """
+    可视化梯形拟合过程
+    
+    参数:
+        color_image: 原始彩色图像
+        mask_cleaned: 清理后的掩码
+        original_contour: 原始轮廓
+        approx_contour: 近似轮廓
+        trapezoid_points: 梯形四个顶点
+    """
+    try:
+        # 创建可视化图像
+        vis_image = color_image.copy()
+        
+        # 1. 绘制清理后的掩码轮廓（绿色）
+        cv2.drawContours(vis_image, [original_contour], -1, (0, 255, 0), 2)
+        
+        # 2. 绘制近似轮廓（蓝色）
+        cv2.drawContours(vis_image, [approx_contour], -1, (255, 0, 0), 2)
+        
+        # 3. 绘制梯形（红色）
+        if trapezoid_points is not None:
+            # 将梯形顶点转换为整数
+            trapezoid_int = np.array(trapezoid_points, dtype=np.int32)
+            
+            # 绘制梯形边
+            for i in range(4):
+                pt1 = tuple(trapezoid_int[i])
+                pt2 = tuple(trapezoid_int[(i + 1) % 4])
+                cv2.line(vis_image, pt1, pt2, (0, 0, 255), 3)
+            
+            # 绘制梯形顶点
+            for i, point in enumerate(trapezoid_int):
+                cv2.circle(vis_image, tuple(point), 5, (0, 0, 255), -1)
+                # 标注顶点编号
+                cv2.putText(vis_image, str(i), 
+                           (point[0] + 10, point[1] - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        
+        # 4. 添加图例
+        legend_y = 30
+        cv2.putText(vis_image, "Green: Original Contour", (10, legend_y), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(vis_image, "Blue: Approximated Contour", (10, legend_y + 25), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+        cv2.putText(vis_image, "Red: Fitted Trapezoid", (10, legend_y + 50), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        
+        # 5. 保存可视化结果
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        result_dir = "result"
+        if not os.path.exists(result_dir):
+            os.makedirs(result_dir)
+        
+        filename = os.path.join(result_dir, f"trapezoid_fitting_{timestamp}.jpg")
+        cv2.imwrite(filename, vis_image)
+        
+        print(f"梯形拟合可视化结果已保存到: {filename}")
+        
+        # 6. 打印梯形顶点坐标
+        if trapezoid_points is not None:
+            print("梯形顶点坐标:")
+            vertex_names = ["左上", "右上", "右下", "左下"]
+            for i, (name, point) in enumerate(zip(vertex_names, trapezoid_points)):
+                print(f"  {name}: ({point[0]:.1f}, {point[1]:.1f})")
+        
+    except Exception as e:
+        print(f"可视化梯形拟合时出错: {e}")
+
+
+def keep_largest_connected_component(mask):
+    """
+    只保留掩码中最大的连通区域，去除小的离群点
+    
+    参数:
+        mask: 二值掩码图像 (H, W)
+    
+    返回:
+        cleaned_mask: 只包含最大连通区域的掩码
+    """
+    try:
+        # 确保掩码是二值的
+        mask_binary = (mask > 0).astype(np.uint8)
+        
+        # 查找所有连通区域
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask_binary, connectivity=8)
+        
+        if num_labels <= 1:  # 没有前景区域或只有一个区域
+            return mask
+        
+        # 找到面积最大的区域（排除背景，索引0是背景）
+        areas = stats[1:, cv2.CC_STAT_AREA]  # 排除背景
+        largest_component_idx = np.argmax(areas) + 1  # +1因为索引0是背景
+        
+        # 创建只包含最大连通区域的掩码
+        cleaned_mask = (labels == largest_component_idx).astype(np.uint8)
+        
+        return cleaned_mask
+        
+    except Exception as e:
+        return mask
+
+
 
 
 def fit_trapezoid(contour):
     """
-    将轮廓拟合成梯形
+    将轮廓拟合成梯形 - 改进版本，上边取最左和最右的点
     
     参数:
         contour: 近似轮廓点
@@ -234,7 +267,60 @@ def fit_trapezoid(contour):
     """
     try:
         if len(contour) < 4:
-            print("❌ 轮廓点数太少，无法拟合梯形")
+            return None
+        
+        # 将轮廓点转换为numpy数组
+        contour_points = contour.reshape(-1, 2)
+        
+        # 计算轮廓的y坐标范围
+        y_min, y_max = np.min(contour_points[:, 1]), np.max(contour_points[:, 1])
+        height = y_max - y_min
+        
+        # 定义上边和下边的区域（各占高度的30%）
+        top_threshold = y_min + height * 0.3
+        bottom_threshold = y_max - height * 0.3
+        
+        # 提取上边区域的点
+        top_mask = contour_points[:, 1] <= top_threshold
+        top_points = contour_points[top_mask]
+        
+        # 提取下边区域的点
+        bottom_mask = contour_points[:, 1] >= bottom_threshold
+        bottom_points = contour_points[bottom_mask]
+        
+        if len(top_points) == 0 or len(bottom_points) == 0:
+            # 如果无法分为上下两部分，使用原来的方法作为备用
+            return fit_trapezoid_fallback(contour)
+        
+        # 上边：取最左边和最右边的点
+        top_left = top_points[np.argmin(top_points[:, 0])]
+        top_right = top_points[np.argmax(top_points[:, 0])]
+        
+        # 下边：取最左边和最右边的点
+        bottom_left = bottom_points[np.argmin(bottom_points[:, 0])]
+        bottom_right = bottom_points[np.argmax(bottom_points[:, 0])]
+        
+        # 构造梯形顶点 [左上, 右上, 右下, 左下]
+        trapezoid_points = np.array([
+            top_left,      # 左上
+            top_right,     # 右上
+            bottom_right,  # 右下
+            bottom_left    # 左下
+        ])
+        
+        return trapezoid_points
+        
+    except Exception as e:
+        # 如果新方法失败，使用原来的方法作为备用
+        return fit_trapezoid_fallback(contour)
+
+
+def fit_trapezoid_fallback(contour):
+    """
+    梯形拟合的备用方法（原来的方法）
+    """
+    try:
+        if len(contour) < 4:
             return None
         
         # 获取轮廓的边界框
@@ -259,24 +345,15 @@ def fit_trapezoid(contour):
             bottom_points[0]    # 左下
         ])
         
-        # 验证是否为有效梯形（上边比下边窄）
-        top_width = np.linalg.norm(top_points[1] - top_points[0])
-        bottom_width = np.linalg.norm(bottom_points[1] - bottom_points[0])
-        
-        if top_width >= bottom_width:
-            print(f"⚠️ 警告: 检测到的形状上宽下窄，可能不是杯子 (上宽: {top_width:.1f}, 下宽: {bottom_width:.1f})")
-            # 仍然返回，但标记为可能不准确
-        
-        print(f"   梯形尺寸: 上宽 {top_width:.1f}px, 下宽 {bottom_width:.1f}px")
-        
         return trapezoid_points
         
     except Exception as e:
-        print(f"❌ 梯形拟合失败: {e}")
         return None
 
 
-def calculate_cup_pose_from_trapezoid(trapezoid_points, depth_image, intrinsics):
+
+
+def calculate_cup_pose_from_trapezoid(trapezoid_points, depth_image, intrinsics, color_image=None):
     """
     基于梯形几何特征计算杯子的3D位姿
     
@@ -293,7 +370,7 @@ def calculate_cup_pose_from_trapezoid(trapezoid_points, depth_image, intrinsics)
         # 1. 计算梯形的几何中心（2D）
         center_2d = np.mean(trapezoid_points, axis=0)
         
-        # 2. 从深度图获取中心点的深度值
+        # 2. 使用多点采样获取更鲁棒的深度值
         center_x, center_y = int(center_2d[0]), int(center_2d[1])
         
         # 确保坐标在图像范围内
@@ -301,12 +378,58 @@ def calculate_cup_pose_from_trapezoid(trapezoid_points, depth_image, intrinsics)
         center_x = max(0, min(w-1, center_x))
         center_y = max(0, min(h-1, center_y))
         
-        depth_value = depth_image[center_y, center_x]
+        # 在中心点周围生成均匀分布的点（网格采样）
+        sample_points = []
+        sample_radius = 8
         
-        if depth_value <= 0:
-            # 如果中心点没有深度值，尝试周围区域
-            search_radius = 5
-            valid_depths = []
+        # 创建3x3网格采样点
+        for dx in [-sample_radius, 0, sample_radius]:
+            for dy in [-sample_radius, 0, sample_radius]:
+                if dx == 0 and dy == 0:
+                    continue
+                
+                sample_x = center_x + dx
+                sample_y = center_y + dy
+                
+                # 确保采样点在图像范围内
+                sample_x = max(0, min(w-1, sample_x))
+                sample_y = max(0, min(h-1, sample_y))
+                
+                sample_points.append((sample_x, sample_y))
+        
+        # 添加几何中心点
+        sample_points.append((center_x, center_y))
+        
+        # 添加更多采样点以提高鲁棒性
+        additional_offsets = [
+            (sample_radius//2, sample_radius//2),
+            (-sample_radius//2, -sample_radius//2),
+            (sample_radius//2, -sample_radius//2),
+            (-sample_radius//2, sample_radius//2),
+            (sample_radius//2, 0),
+            (-sample_radius//2, 0),
+            (0, sample_radius//2),
+            (0, -sample_radius//2)
+        ]
+        for dx, dy in additional_offsets:
+            sample_x = center_x + dx
+            sample_y = center_y + dy
+            sample_x = max(0, min(w-1, sample_x))
+            sample_y = max(0, min(h-1, sample_y))
+            sample_points.append((sample_x, sample_y))
+        
+        # 收集所有有效深度值
+        valid_depths = []
+        for px, py in sample_points:
+            px = max(0, min(w-1, px))
+            py = max(0, min(h-1, py))
+            d = depth_image[py, px]
+            if d > 0:
+                valid_depths.append(d)
+        
+        # 如果采样点不够，扩大搜索范围
+        if len(valid_depths) < 2:
+            search_radius = 10
             for dy in range(-search_radius, search_radius+1):
                 for dx in range(-search_radius, search_radius+1):
                     ny, nx = center_y + dy, center_x + dx
@@ -314,12 +437,12 @@ def calculate_cup_pose_from_trapezoid(trapezoid_points, depth_image, intrinsics)
                         d = depth_image[ny, nx]
                         if d > 0:
                             valid_depths.append(d)
-            
-            if len(valid_depths) > 0:
-                depth_value = np.mean(valid_depths)
-            else:
-                print("❌ 无法获取有效的深度值")
-                return None, None
+        
+        if len(valid_depths) == 0:
+            return None, None
+        
+        # 使用均值计算深度值
+        depth_value = np.mean(valid_depths)
         
         # 3. 将2D中心转换为3D坐标
         fx, fy = intrinsics[0, 0], intrinsics[1, 1]
@@ -331,48 +454,21 @@ def calculate_cup_pose_from_trapezoid(trapezoid_points, depth_image, intrinsics)
         
         center_3d = np.array([x_3d, y_3d, z_3d])
         
-        # 4. 计算杯子的向上方向向量
-        # 基于梯形的对称轴方向
+        # 4. 计算杯子的向上方向向量（Z轴）
         top_mid = (trapezoid_points[0] + trapezoid_points[1]) / 2  # 上边中点
         bottom_mid = (trapezoid_points[2] + trapezoid_points[3]) / 2  # 下边中点
         
-        # 对称轴方向（从上到下）
-        symmetry_axis_2d = bottom_mid - top_mid
+        # 对称轴方向（从下到上，即杯子向上方向）
+        symmetry_axis_2d = top_mid - bottom_mid
         symmetry_axis_2d = symmetry_axis_2d / np.linalg.norm(symmetry_axis_2d)
         
         # 将2D方向向量转换为3D方向向量
-        # 假设杯子基本垂直放置，主要变化在XY平面
-        normal_3d = np.array([symmetry_axis_2d[0], symmetry_axis_2d[1], 0])
-        
-        # 归一化并确保指向上方（z分量为正）
-        if normal_3d[2] < 0:
-            normal_3d = -normal_3d
-        
-        # 添加一些向上的分量，因为杯子通常是向上开口的
-        normal_3d[2] = 0.3  # 给z分量一个正值
+        normal_3d = np.array([symmetry_axis_2d[0], symmetry_axis_2d[1], 0.5])
         normal_3d = normal_3d / np.linalg.norm(normal_3d)
-        
-        # 5. 计算杯子的X方向（水平方向）
-        # 使用梯形的上边方向作为X轴参考
-        top_edge = trapezoid_points[1] - trapezoid_points[0]  # 上边向量
-        top_edge = top_edge / np.linalg.norm(top_edge)
-        
-        # 转换为3D
-        x_direction_3d = np.array([top_edge[0], top_edge[1], 0])
-        x_direction_3d = x_direction_3d / np.linalg.norm(x_direction_3d)
-        
-        print(f"   几何分析:")
-        print(f"     对称轴方向: [{symmetry_axis_2d[0]:.3f}, {symmetry_axis_2d[1]:.3f}]")
-        print(f"     上边方向: [{top_edge[0]:.3f}, {top_edge[1]:.3f}]")
-        print(f"     3D向上向量: [{normal_3d[0]:.3f}, {normal_3d[1]:.3f}, {normal_3d[2]:.3f}]")
-        print(f"     3D X方向: [{x_direction_3d[0]:.3f}, {x_direction_3d[1]:.3f}, {x_direction_3d[2]:.3f}]")
         
         return center_3d, normal_3d
         
     except Exception as e:
-        print(f"❌ 3D位姿计算失败: {e}")
-        import traceback
-        traceback.print_exc()
         return None, None
 
 
@@ -434,42 +530,25 @@ def extract_spoon_head_center(point_cloud, main_axis, centroid, head_ratio=0.50)
         head_points = points[head_mask]
         
         if len(head_points) < 10:
-            print("⚠️ 勺头点云数据太少")
-            return None, None
+            return None, None, None, None
         
         # 5. 计算勺头中心（勺头区域点云的质心）
         head_center = np.mean(head_points, axis=0)
         
         # 6. 估计勺头半径（在垂直于主轴的平面上）
-        # 将勺头点投影到垂直于主轴的平面上
         head_centered = head_points - head_center
-        # 去除主轴方向的分量
         perpendicular_components = head_centered - (head_centered @ main_axis)[:, np.newaxis] * main_axis
-        # 计算垂直距离
         perpendicular_distances = np.linalg.norm(perpendicular_components, axis=1)
         head_radius = np.mean(perpendicular_distances)
         
         # 7. 计算勺柄方向和姿态
-        # 勺柄方向就是主轴方向（从勺柄指向勺头）
         handle_direction = main_axis
-        
-        # 将勺柄方向转换为欧拉角
         handle_roll, handle_pitch, handle_yaw = vector_to_euler(handle_direction)
         handle_pose = [handle_roll, handle_pitch, handle_yaw]
-        
-        print(f"🥄 勺子特征提取:")
-        print(f"   勺头中心: [{head_center[0]:.3f}, {head_center[1]:.3f}, {head_center[2]:.3f}]")
-        print(f"   勺头半径: {head_radius:.3f}m ({head_radius*100:.1f}cm)")
-        print(f"   勺头点数: {len(head_points)} / {len(points)} ({len(head_points)/len(points)*100:.1f}%)")
-        print(f"   勺柄方向: [{handle_direction[0]:.3f}, {handle_direction[1]:.3f}, {handle_direction[2]:.3f}]")
-        print(f"   勺柄姿态: [roll={handle_roll:.1f}°, pitch={handle_pitch:.1f}°, yaw={handle_yaw:.1f}°]")
         
         return head_center, head_radius, handle_direction, handle_pose
         
     except Exception as e:
-        print(f"❌ 提取勺头特征时出错: {e}")
-        import traceback
-        traceback.print_exc()
         return None, None, None, None
 
 
@@ -490,7 +569,6 @@ def extract_elongated_features(point_cloud):
         points = np.asarray(point_cloud.points)
         
         if len(points) < 10:
-            print("⚠️ 点云数据太少")
             return None, None, None, None
         
         # 1. 先计算质心（用于PCA分析）
@@ -515,8 +593,6 @@ def extract_elongated_features(point_cloud):
         secondary_axis = eigenvectors[:, 1]  # 第二主成分
         
         # 7. 确定主轴方向（解决方向歧义问题）
-        # 策略：让主轴指向更宽的一端（通常是勺头）
-        # 使用多维度宽度测量，更鲁棒
         projections = centered_points @ main_axis
         
         # 将点分为两组：正投影和负投影
@@ -553,27 +629,15 @@ def extract_elongated_features(point_cloud):
             negative_score = (negative_width_secondary + negative_width_third + 
                             negative_cross_section * 0.5) / 2.5
             
-            print(f"   方向判断（基于几何宽度，不受距离影响）:")
-            print(f"     正向端 - 次轴宽度: {positive_width_secondary:.4f}, "
-                  f"第三轴宽度: {positive_width_third:.4f}, "
-                  f"横截面: {positive_cross_section:.4f}, 综合分数: {positive_score:.4f}")
-            print(f"     负向端 - 次轴宽度: {negative_width_secondary:.4f}, "
-                  f"第三轴宽度: {negative_width_third:.4f}, "
-                  f"横截面: {negative_cross_section:.4f}, 综合分数: {negative_score:.4f}")
-            
             # 如果负向端分数更高，翻转主轴方向
             if negative_score > positive_score:
                 main_axis = -main_axis
-                print(f"   ✓ 主轴翻转，指向更宽的一端（勺头）")
-            else:
-                print(f"   ✓ 主轴方向保持，已指向更宽的一端（勺头）")
         
         # 8. 估计物体长度（沿主轴的范围）
         projections = centered_points @ main_axis  # 重新计算投影
         length = np.max(projections) - np.min(projections)
         
         # 9. 计算真正的中心点：沿主轴的几何中点（不是质心）
-        # 这样中心点在勺子的中部，更方便抓取
         min_proj = np.min(projections)
         max_proj = np.max(projections)
         mid_proj = (min_proj + max_proj) / 2.0  # 主轴上的中点投影值
@@ -581,64 +645,12 @@ def extract_elongated_features(point_cloud):
         # 将中点投影值转换回3D空间坐标
         center = centroid + mid_proj * main_axis
         
-        # 10. 计算特征值比率（用于判断是否真的是细长物体）
-        ratio_1_2 = eigenvalues[0] / eigenvalues[1] if eigenvalues[1] > 0 else 0
-        ratio_1_3 = eigenvalues[0] / eigenvalues[2] if eigenvalues[2] > 0 else 0
-        
-        print(f"🔍 细长物体特征提取 (PCA):")
-        print(f"   质心位置: [{centroid[0]:.3f}, {centroid[1]:.3f}, {centroid[2]:.3f}] (用于PCA)")
-        print(f"   中心位置: [{center[0]:.3f}, {center[1]:.3f}, {center[2]:.3f}] (主轴几何中点，抓取点)")
-        print(f"   主轴方向: [{main_axis[0]:.3f}, {main_axis[1]:.3f}, {main_axis[2]:.3f}]")
-        print(f"   估计长度: {length:.3f}m ({length*100:.1f}cm)")
-        print(f"   特征值比率: {ratio_1_2:.2f} (主/次), {ratio_1_3:.2f} (主/第三)")
-        
-        # 判断是否是细长物体（主特征值明显大于其他）
-        if ratio_1_2 < 2.0:
-            print("⚠️ 警告: 物体可能不是细长形状")
-        
         return center, main_axis, secondary_axis, length
         
     except Exception as e:
-        print(f"❌ 提取细长物体特征时出错: {e}")
-        import traceback
-        traceback.print_exc()
         return None, None, None, None
 
 
-def calculate_cup_pose(center, normal):
-    """
-    根据杯子中心和法向量计算位姿变换矩阵（平面检测法）
-    
-    参数:
-        center: 杯子中心位置 (x, y, z)
-        normal: 杯子顶面法向量 (nx, ny, nz)
-    
-    返回:
-        4x4变换矩阵
-    """
-    # Z轴：法向量方向
-    z_axis = normal / np.linalg.norm(normal)
-    
-    # X轴：选择一个与z轴垂直的方向
-    # 如果z轴接近竖直，选择[1,0,0]作为参考
-    if abs(z_axis[2]) > 0.9:
-        x_axis = np.cross(z_axis, np.array([0, 1, 0]))
-    else:
-        x_axis = np.cross(z_axis, np.array([0, 0, 1]))
-    x_axis = x_axis / np.linalg.norm(x_axis)
-    
-    # Y轴：通过叉乘得到
-    y_axis = np.cross(z_axis, x_axis)
-    y_axis = y_axis / np.linalg.norm(y_axis)
-    
-    # 构建变换矩阵
-    T = np.eye(4)
-    T[:3, 0] = x_axis
-    T[:3, 1] = y_axis
-    T[:3, 2] = z_axis
-    T[:3, 3] = center
-    
-    return T
 
 
 def calculate_cup_pose_from_trapezoid_matrix(center_3d, normal_3d, trapezoid_points):
@@ -657,11 +669,11 @@ def calculate_cup_pose_from_trapezoid_matrix(center_3d, normal_3d, trapezoid_poi
         - Y轴：通过叉乘得到
     """
     try:
-        # Z轴：杯子向上方向
+        # Z轴：杯子向上方向（已经计算好的normal_3d）
         z_axis = normal_3d / np.linalg.norm(normal_3d)
         
-        # X轴：基于梯形上边的水平方向
-        top_edge = trapezoid_points[1] - trapezoid_points[0]  # 上边向量
+        # X轴：基于梯形上边的水平方向，指向左方
+        top_edge = trapezoid_points[0] - trapezoid_points[1]  # 从左到右的方向
         top_edge = top_edge / np.linalg.norm(top_edge)
         
         # 将2D上边方向转换为3D
@@ -671,7 +683,7 @@ def calculate_cup_pose_from_trapezoid_matrix(center_3d, normal_3d, trapezoid_poi
         x_axis = x_axis - np.dot(x_axis, z_axis) * z_axis
         x_axis = x_axis / np.linalg.norm(x_axis)
         
-        # Y轴：通过叉乘得到
+        # Y轴：通过叉乘得到（右手坐标系）
         y_axis = np.cross(z_axis, x_axis)
         y_axis = y_axis / np.linalg.norm(y_axis)
         
@@ -682,15 +694,9 @@ def calculate_cup_pose_from_trapezoid_matrix(center_3d, normal_3d, trapezoid_poi
         T[:3, 2] = z_axis
         T[:3, 3] = center_3d
         
-        print(f"   变换矩阵构建:")
-        print(f"     X轴 (水平): [{x_axis[0]:.3f}, {x_axis[1]:.3f}, {x_axis[2]:.3f}]")
-        print(f"     Y轴 (侧向): [{y_axis[0]:.3f}, {y_axis[1]:.3f}, {y_axis[2]:.3f}]")
-        print(f"     Z轴 (向上): [{z_axis[0]:.3f}, {z_axis[1]:.3f}, {z_axis[2]:.3f}]")
-        
         return T
         
     except Exception as e:
-        print(f"❌ 构建变换矩阵失败: {e}")
         return None
 
 
@@ -754,6 +760,10 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
     从掩码、深度图和彩色图中估计物体的位姿
     根据物体类别自动选择合适的估计方法
     
+    支持的物体类别：
+    - 杯子类 ('cup', 'mug', 'glass'): 使用梯形轮廓法
+    - 细长物体 ('spoon', 'knife', 'fork'等): 使用PCA主轴法
+    
     参数:
         mask (numpy.ndarray): 物体掩码，形状为(H, W)，值为0或1
         depth_image (numpy.ndarray): 深度图像，形状为(H, W)，单位为米
@@ -763,27 +773,15 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
         object_class (str): 物体类别，用于选择合适的估计方法
     
     返回:
-        pose: [x, y, z, roll, pitch, yaw] 在基坐标系中的位姿
-        T: 4x4变换矩阵
-    # 得到pose基于相机的座标
+        pose: [x, y, z, roll, pitch, yaw] 在基坐标系中的位姿，失败时返回None
+        T: 4x4变换矩阵，失败时返回None
     """
     try:
-        # 0. 确保mask尺寸与图像匹配(双保险)
+        # 0. 确保mask尺寸与图像匹配
         h, w = color_image.shape[:2]
         mask_h, mask_w = mask.shape[:2]
         
-        # 保存掩码用于调试
-        import os
-        from datetime import datetime
-        os.makedirs("result", exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        mask_path = f"result/mask_debug_{timestamp}.png"
-        cv2.imwrite(mask_path, mask*255)
-        print(f"🔍 掩码已保存用于调试: {mask_path}")
-        
-        
         if (mask_h, mask_w) != (h, w):
-            print(f"  ⚠️ [mask2pose] 调整mask尺寸: ({mask_h}, {mask_w}) -> ({h}, {w})")
             mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)         
         
         # 1. 根据掩码提取点云
@@ -792,33 +790,13 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
         # 确保depth是2D的 (H, W)
         depth_2d = depth_image[:, :, 0] if len(depth_image.shape) == 3 else depth_image
         
-
-        
         # 应用掩码
         color_masked = color_image * mask_2d[:, :, np.newaxis]
         depth_masked = depth_2d * mask_2d
         
-        # 检查掩码区域的深度值
-        masked_depth_values = depth_masked[mask_2d > 0]
-        if len(masked_depth_values) > 0:
-            print(f"  掩码区域深度值: [{masked_depth_values.min():.3f}, {masked_depth_values.max():.3f}]")
-            print(f"  掩码区域平均深度: {masked_depth_values.mean():.3f}m")
-            print(f"  掩码区域有效深度点数: {np.sum((masked_depth_values > 0.1) & (masked_depth_values < 3.5))}")
-        else:
-            print(f"  ❌ 警告: 掩码区域没有像素!")
-
-
-        
-        # 保存深度掩码图(用于调试)
-        if depth_masked.max() > 0:
-            depth_vis = cv2.normalize(depth_masked, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-  
         point_cloud = create_point_cloud(depth_masked, intrinsics, color_masked)
         
-        # o3d.visualization.draw_geometries([point_cloud], window_name="Masked Point Cloud")
-        
         if len(point_cloud.points) < 50:
-            print("❌ 点云数据太少，无法估计位姿")
             return None, None
         
         # 2. 如果提供了相机到基坐标系的变换，先转换到基坐标系
@@ -835,7 +813,6 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
                          'container', 'plate', 'dish']
         
         if object_class.lower() in elongated_objects:
-            print(f"📏 检测到细长物体 '{object_class}'，使用PCA主轴法")
             # 使用PCA方法
             center, main_axis, secondary_axis, length = extract_elongated_features(point_cloud)
             
@@ -865,217 +842,33 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
             # 转换为位置和欧拉角
             pose = transform_matrix_to_pos_euler(T)
             
-            print(f"✅ {object_class}位姿估计成功:")
-            print(f"   位置: [{pose[0]:.3f}, {pose[1]:.3f}, {pose[2]:.3f}]")
-            print(f"   姿态: [{pose[3]:.1f}°, {pose[4]:.1f}°, {pose[5]:.1f}°]")
-            
             # 如果有勺头信息，添加到pose中
             if extra_info:
                 pose = list(pose)  # 转换为列表以便添加额外信息
                 pose.append(extra_info)  # 将额外信息作为第7个元素
             
         else:
-            print(f"🔲 检测到平面物体 '{object_class}'，使用梯形轮廓法")
-            
-            # 优先使用新的梯形轮廓方法
+            # 使用梯形轮廓方法
             if object_class.lower() in ['cup', 'mug', 'glass']:
-                print("   尝试使用梯形轮廓方法...")
+                # 注意：extract_cup_side_contour内部会进行掩码清理，所以传入原始mask即可
                 trapezoid_points, center_3d, normal_3d, success = extract_cup_side_contour(
                     mask, color_image, depth_2d, intrinsics
                 )
                 
                 if success and center_3d is not None:
-                    print("✅ 梯形轮廓方法成功")
                     # 计算位姿变换矩阵
                     T = calculate_cup_pose_from_trapezoid_matrix(center_3d, normal_3d, trapezoid_points)
                     
                     if T is not None:
                         # 转换为位置和欧拉角
                         pose = transform_matrix_to_pos_euler(T)
-                        
-                        print(f"✅ {object_class}位姿估计成功 (梯形轮廓法):")
-                        print(f"   位置: [{pose[0]:.3f}, {pose[1]:.3f}, {pose[2]:.3f}]")
-                        print(f"   姿态: [{pose[3]:.1f}°, {pose[4]:.1f}°, {pose[5]:.1f}°]")
-                        
                         return pose, T
-                    else:
-                        print("⚠️ 梯形轮廓法计算变换矩阵失败，回退到平面检测法")
-                else:
-                    print("⚠️ 梯形轮廓法失败，回退到平面检测法")
             
-            # 回退到传统的平面检测方法
-            print("   使用传统平面检测法...")
-            center, normal, radius = extract_cup_features(point_cloud)
-            
-            if center is None:
-                return None, None
-            
-            # 计算位姿变换矩阵
-            T = calculate_cup_pose(center, normal)
-            
-            # 转换为位置和欧拉角
-            pose = transform_matrix_to_pos_euler(T)
-            
-            print(f"✅ {object_class}位姿估计成功 (平面检测法):")
-            print(f"   位置: [{pose[0]:.3f}, {pose[1]:.3f}, {pose[2]:.3f}]")
-            print(f"   姿态: [{pose[3]:.1f}°, {pose[4]:.1f}°, {pose[5]:.1f}°]")
+            # 如果不是杯子类物体或梯形轮廓法失败，返回None
+            return None, None
         
         return pose, T
         
     except Exception as e:
-        print(f"❌ 位姿估计失败: {e}")
-        import traceback
-        traceback.print_exc()
         return None, None
 
-
-def draw_pose_axes(image, intrinsics, pose_matrix, axis_length=0.05):
-    # 提取旋转和平移
-    R = pose_matrix[:3, :3]
-    t = pose_matrix[:3, 3]
-    # 转为OpenCV格式
-    rvec, _ = cv2.Rodrigues(R)
-    tvec = t.reshape(3, 1)
-    # 绘制坐标轴
-    cv2.drawFrameAxes(image, intrinsics, np.zeros(5), rvec, tvec, axis_length)
-    cv2.imshow("Pose Visualization", image)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-    return image
-
-def visualize_result(color_image, depth_image, T_cam2base, intrinsics, pose):
-    """
-    可视化检测结果
-    
-    参数:
-        color_image: 彩色图像
-        depth_image: 深度图像
-        T_cam2base: 相机到基坐标系的变换
-        intrinsics: 相机内参
-        pose: 物体位姿 [x, y, z, roll, pitch, yaw] 或包含额外信息的列表
-    """
-    try:
-        # 创建完整点云
-        pcd = create_point_cloud(depth_image, intrinsics, color_image)
-        if T_cam2base is not None:
-            pcd.transform(T_cam2base)
-        
-        # 创建坐标系
-        pose_matrix = np.eye(4)
-        pose_matrix[:3, 3] = pose[:3]
-        # 只使用前6个元素的后3个（roll, pitch, yaw）
-        r = R.from_euler('xyz', pose[3:6], degrees=True)
-        pose_matrix[:3, :3] = r.as_matrix()
-        
-        coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-        coordinate_frame.transform(pose_matrix)
-        
-        geometries = [pcd, coordinate_frame]
-        
-        # 检查是否有勺头中心信息
-        if isinstance(pose, list) and len(pose) > 6 and isinstance(pose[6], dict):
-            extra_info = pose[6]
-            if 'spoon_head_center' in extra_info:
-                head_center = extra_info['spoon_head_center']
-                head_radius = extra_info['spoon_head_radius']
-                
-                # 创建球体标记勺头中心（橙色）
-                sphere = o3d.geometry.TriangleMesh.create_sphere(radius=head_radius * 0.5)
-                sphere.translate(head_center)
-                sphere.paint_uniform_color([1.0, 0.5, 0.0])  # 橙色
-                geometries.append(sphere)
-                
-                print(f"🥄 勺头中心标记: 橙色球体")
-        
-        # 可视化
-        o3d.visualization.draw_geometries(geometries)
-        
-    except Exception as e:
-        print(f"⚠️ 可视化失败: {e}")
-
-
-def visualize_multi_objects(color_image, depth_image, T_cam2base, intrinsics, poses_info):
-    """
-    可视化多个物体的检测结果
-    
-    参数:
-        color_image: 彩色图像
-        depth_image: 深度图像
-        T_cam2base: 相机到基坐标系的变换
-        intrinsics: 相机内参
-        poses_info: 物体位姿信息列表 [
-            {'class': str, 'pose': [x, y, z, roll, pitch, yaw], 'confidence': float, 'extra_info': dict},
-            ...
-        ]
-    """
-    try:
-        # 创建完整点云
-        pcd = create_point_cloud(depth_image, intrinsics, color_image)
-        if T_cam2base is not None:
-            pcd.transform(T_cam2base)
-        
-        # 为每个物体创建坐标系
-        geometries = [pcd]
-        
-        # 为不同类别定义不同颜色的坐标系
-        colors = [
-            [1, 0, 0],  # 红色
-            [0, 1, 0],  # 绿色
-            [0, 0, 1],  # 蓝色
-            [1, 1, 0],  # 黄色
-            [1, 0, 1],  # 紫色
-            [0, 1, 1],  # 青色
-        ]
-        
-        print(f"\n🎨 创建 {len(poses_info)} 个物体的坐标系...")
-        
-        for idx, pose_info in enumerate(poses_info):
-            pose = pose_info['pose']
-            obj_class = pose_info['class']
-            
-            # 创建位姿变换矩阵
-            pose_matrix = np.eye(4)
-            pose_matrix[:3, 3] = pose[:3]
-            # 只使用前6个元素的后3个（roll, pitch, yaw）
-            r = R.from_euler('xyz', pose[3:6], degrees=True)
-            pose_matrix[:3, :3] = r.as_matrix()
-            
-            # 创建坐标系（大小根据物体索引略有变化）
-            coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
-                size=0.08 + idx * 0.02
-            )
-            coordinate_frame.transform(pose_matrix)
-            
-            # 添加到几何体列表
-            geometries.append(coordinate_frame)
-            
-            print(f"  {idx+1}. {obj_class}: 坐标系大小 {0.08 + idx * 0.02:.2f}m")
-            
-            # 如果有勺头中心信息，创建橙色球体标记
-            if 'extra_info' in pose_info and pose_info['extra_info']:
-                extra = pose_info['extra_info']
-                if 'spoon_head_center' in extra:
-                    head_center = extra['spoon_head_center']
-                    head_radius = extra['spoon_head_radius']
-                    
-                    # 创建球体标记勺头中心（橙色）
-                    sphere = o3d.geometry.TriangleMesh.create_sphere(radius=head_radius * 0.5)
-                    sphere.translate(head_center)
-                    sphere.paint_uniform_color([1.0, 0.5, 0.0])  # 橙色
-                    geometries.append(sphere)
-                    
-                    print(f"       -> 勺头中心标记: 橙色球体")
-        
-        print("\n💡 可视化说明:")
-        print("  - 白色点云: 场景")
-        for idx, pose_info in enumerate(poses_info):
-            print(f"  - 坐标系 {idx+1}: {pose_info['class']}")
-        print("  - X轴(红), Y轴(绿), Z轴(蓝)")
-        
-        # 可视化所有几何体
-        o3d.visualization.draw_geometries(geometries)
-        
-    except Exception as e:
-        print(f"⚠️ 可视化失败: {e}")
-        import traceback
-        traceback.print_exc()

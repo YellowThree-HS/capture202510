@@ -46,7 +46,7 @@ def camera_calibrate(iamges_path):
     # 角点的个数以及棋盘格间距
     XX = 11  # 标定板的中长度对应的角点的个数
     YY = 8  # 标定板的中宽度对应的角点的个数
-    L = 0.015  # 标定板一格的长度  单位为米
+    L = 0.02  # 标定板一格的长度  单位为米
 
     # 设置寻找亚像素角点的参数，采用的停止准则是最大循环次数30和最大误差容限0.001
     criteria = (cv2.TERM_CRITERIA_MAX_ITER | cv2.TERM_CRITERIA_EPS, 30, 0.001)

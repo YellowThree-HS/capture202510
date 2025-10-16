@@ -1,5 +1,3 @@
-# 这个文件是读取collect_data/collect_data/poses.txt和collect_data/collect_data/images/中的位姿和图像，
-# 用来测试不同的手眼标定算法，并找出最优的算法
 import cv2
 import numpy as np
 import os
@@ -16,14 +14,6 @@ objpoints = []
 imgpoints = []
 
 def euler_to_rotation_matrix(rx, ry, rz):
-    """
-    根据越疆机器人官方文档实现欧拉角到旋转矩阵的转换
-    旋转顺序：X -> Y -> Z（外旋，绕固定轴）
-    rx=γ, ry=β, rz=α
-    
-    注意：虽然旋转顺序是X->Y->Z，但矩阵乘法顺序是Rz @ Ry @ Rx
-    这是因为外旋的定义：先绕X轴旋转，再绕Y轴旋转，最后绕Z轴旋转
-    """
     Rx = np.array([
         [1, 0, 0],
         [0, np.cos(rx), -np.sin(rx)],
@@ -42,8 +32,6 @@ def euler_to_rotation_matrix(rx, ry, rz):
         [0, 0, 1]
     ])
     
-    # 正确的实现：R = Rz @ Ry @ Rx
-    # 这对应于外旋X->Y->Z的顺序
     R = Rz @ Ry @ Rx
     return R
 

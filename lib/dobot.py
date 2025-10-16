@@ -120,7 +120,7 @@ class DobotRobot(Robot):
         Returns:
             T: The current X Y Z rx ry rz state of the robot.
         """
-        assert not self.robot_is_err, f"{self.robot_ip}: error!"
+        # assert not self.robot_is_err, f"{self.robot_ip}: error!"
         pos = list(map(float, self.r_inter.GetPose().split("{")[1].split("}")[0].split(",")))  # 单位：度数
         return pos
 

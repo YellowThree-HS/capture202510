@@ -51,8 +51,8 @@ def main():
     print("\n正在加载 YOLO World 模型...")
     try:
         detector = YOLOSegmentator(
-            yolo_weights=r"D:\Projects\PycharmProjects\capture\weights\yolov8s-world.pt",
-            sam_weights=r"D:\Projects\PycharmProjects\capture\weights\FastSAM-s.pt"
+            yolo_weights=r"D:\Projects\capture\weights\yolov8s-world.pt",
+            sam_weights=r"D:\Projects\capture\weights\sam2.1_b.pt"
         )
         print("✓ 模型加载完成")
     except Exception as e:

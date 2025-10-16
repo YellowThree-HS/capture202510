@@ -3,17 +3,16 @@ import numpy as np
 import os
 from lib.dobot import DobotRobot
 from lib.camera import Camera
+from scipy.spatial.transform import Rotation as R
 
-count = 0 
 
 save_path = "./collect_data/"
 if not os.path.exists(save_path):
     os.makedirs(save_path, exist_ok=True)
 
-def collect_data(T,color_image):
+def collect_data(T,color_image,count):
     
     x, y, z = T[:3, 3]
-    from scipy.spatial.transform import Rotation as R
     euler = R.from_matrix(T[:3, :3]).as_euler('xyz', degrees=False)  # 弧度
     
     pose = [x, y, z] + list(euler)
@@ -28,7 +27,7 @@ def collect_data(T,color_image):
 
 def detect_aruco_pose(cam, color_image):
     # 检测棋盘格,棋盘是11x8，方格边长15mm
-    squaresX, squaresY, squareLength = 11, 8, 0.015
+    squaresX, squaresY, squareLength = 11, 8, 0.02
     criteria = (cv2.TERM_CRITERIA_MAX_ITER | cv2.TERM_CRITERIA_EPS, 30, 0.001)
     objp = np.zeros((squaresX * squaresY, 3), np.float32)
     objp[:, :2] = np.mgrid[0:squaresX, 0:squaresY].T.reshape(-1, 2)
@@ -135,18 +134,49 @@ def hand_eye_calibrate(arm_poses, all_board_rvecs, all_board_tvecs):
     return best_result['R'], best_result['t']
 
 def main():
+    count = 0 
     # 初始化相机
     cam = Camera(camera_model='D405')  # 初始化相机
 
     # 初始化机械臂
-    robot = DobotRobot("192.168.5.1", no_gripper=True)
-    robot.r_inter.StartDrag()
+    # robot = DobotRobot("192.168.5.2", no_gripper=True)
+    # robot.r_inter.StartDrag()
     print("已进入拖拽模式，请手动拖动机械臂到不同位置，对准标定板。每次按空格采集一组数据，ESC退出。")
+    # breakpoint()
 
-
+    arm_poses_text = []
     arm_poses = []
     all_board_rvecs = []
     all_board_tvecs = []
+    T_camera2end = np.eye(4)
+
+    with open(f"{save_path}poses.txt", "r") as f:
+        for line in f:
+            arm_pose = line.strip().split(",")
+            arm_pose = [float(i) for i in arm_pose]
+            arm_poses_text.append(arm_pose)
+    
+
+    for pose in arm_poses_text:
+        T = np.eye(4)
+        T[:3, :3] = R.from_euler('xyz', pose[3:6], degrees=False).as_matrix()
+        T[:3, 3] = pose[:3]
+        arm_poses.append(T)
+
+    image_path_dir = './collect_data/'
+    for image_name in os.listdir(image_path_dir):
+        if image_name.endswith(".jpg"):
+            image_path_full = os.path.join(image_path_dir, image_name)
+            print(image_path_full)
+            color_image = cv2.imread(image_path_full)
+            board_rvec, board_tvec = detect_aruco_pose(cam, color_image)
+            all_board_rvecs.append(board_rvec)
+            all_board_tvecs.append(board_tvec)
+
+    
+    hand_eye_calibrate(arm_poses, all_board_rvecs, all_board_tvecs)
+    
+    return 0
     
     with open(f"{save_path}poses.txt", "w") as f:
         f.write("")  # 清空文件内容
@@ -165,7 +195,7 @@ def main():
                 all_board_rvecs.append(board_rvec)
                 all_board_tvecs.append(board_tvec)
                 arm_poses.append(T)  # 直接保存4x4矩阵
-                collect_data(T,color_image)
+                collect_data(T,color_image,count)
                 count += 1
                 if count >= 5:  # 最少采集5组数据
                     hand_eye_calibrate(arm_poses, all_board_rvecs, all_board_tvecs)
