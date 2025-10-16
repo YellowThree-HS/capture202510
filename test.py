@@ -5,7 +5,7 @@ import numpy as np
 from datetime import datetime
 from lib.camera import Camera
 from lib.yolo_and_sam import YOLOSegmentator
-from lib.mask2pose import mask2pose, visualize_result
+from lib.mask2pose import mask2pose, draw_pose_axes
 from lib.dobot import DobotRobot
 from cv2 import aruco
 
@@ -67,21 +67,21 @@ def main():
 
     cam = Camera(camera_model='D405')  # 初始化相机
     robot = DobotRobot(robot_ip='192.168.5.1')  # 初始化机械臂
-    
+    # robot.r_inter.StartDrag()
+    # return 0
     
     
     
     # # 读取原始图像
-    color_image_path = 'test/color.png'
-    depth_image_path = 'test/depth.png'
-    color_image = cv2.imread(color_image_path)
-    depth_image = cv2.imread(depth_image_path, cv2.IMREAD_UNCHANGED)
-    # color_image, depth_image = cam.get_frames()
-    # cv2.imwrite('test/color.png',color_image)
-    # cv2.imwrite('test/depth.png',depth_image)
-    # return 0
+    # color_image_path = 'test/color.png'
+    # depth_image_path = 'test/depth.png'
+    # color_image = cv2.imread(color_image_path)
+    # depth_image = cv2.imread(depth_image_path, cv2.IMREAD_UNCHANGED)
+    color_image, depth_image = cam.get_frames()
+    cv2.imwrite('test/color.png',color_image)
+    cv2.imwrite('test/depth.png',depth_image)
+    return 0
 
-    
     # 确保深度图是二维的
     if len(depth_image.shape) == 3:
         print(f"  深度图是3通道,取第一个通道")
@@ -158,10 +158,22 @@ def main():
     # robot.moveL(pose_matrix)
     print("目标物体相对于机械臂基座的位姿矩阵:\n", pose_matrix)
 
-    
-
+    # init_joint_state = np.array([-90.0, 0.0, -90.0, 0.0, 90.0, 90.0])  # left arm
+    # robot.moveJ(init_joint_state)
+    # pose_matrix = np.array([[    0.26074  ,  -0.10167  ,  -0.96004  ,  -0.56438],
+    #                         [   -0.96455  ,  0.014468 ,    -0.2635  ,  -0.18789],
+    #                         [   0.040679  ,  0.99471  , -0.094291   ,   0.5605],
+    #                         [          0  ,         0 ,          0   ,        1]])
+#     pose_matrix = np.array( [[    0.99875    0.031514   -0.038725     0.40659]
+#  [    0.04272    -0.94085     0.33611      0.5097]
+#  [  -0.025842    -0.33734    -0.94103     0.45623]
+#  [          0           0           0           1]])
     draw_pose_axes(color_image, intrinsics, T_object2cam)
-
+    from scipy.spatial.transform import Rotation as R
+    rx, ry, rz = R.from_matrix(pose_matrix[:3, :3]).as_euler('xyz', degrees=True)
+    x,y,z = np.array(pose_matrix[:3, 3]) *1000.0
+    ry = ry + 90 
+    robot.moveL(np.array([x,y,z,rx,ry,rz]))
     # print(f"ArUco板相对于机械臂基座位置 (mm): X={position[0]*1000:.2f}, Y={position[1]*1000:.2f}, Z={position[2]*1000:.2f}\n")
     # print(f"ArUco板相对于机械臂基座变换矩阵:\n{pose_matrix}")
 

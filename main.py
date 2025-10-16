@@ -49,7 +49,7 @@ def main():
     
     # 初始化相机
     try:
-        cam = Camera(camera_model='D435')
+        cam = Camera(camera_model='D405')
     except Exception as e:
         print(f"相机初始化失败: {e}")
         print("请确保D435相机已正确连接")
@@ -253,6 +253,7 @@ def main():
                     
                 else:
                     print(f"\n✗ 检测失败")
+                
                 
                 # 删除临时文件
                 if os.path.exists(temp_image_path):
