@@ -16,16 +16,18 @@ from scipy.spatial.transform import Rotation as R
 
 
 class ArUcoVerification:
-    def __init__(self, calibration_file='best_hand_eye_calibration.npy', robot_ip='192.168.5.1'):
+    def __init__(self, calibration_file='best_hand_eye_calibration.npy', robot_ip='192.168.5.2', arm_side='left'):
         """
         初始化ArUco验证系统
         
         参数:
             calibration_file: 手眼标定矩阵文件路径
             robot_ip: 机械臂IP地址
+            arm_side: 机械臂侧别 ('left' 或 'right')
         """
         self.calibration_file = calibration_file
         self.robot_ip = robot_ip
+        self.arm_side = arm_side
         
         # ArUco参数设置
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36H11)
@@ -37,6 +39,9 @@ class ArUcoVerification:
         
         # 创建ArUco板子
         self.create_aruco_board()
+        
+        # 相机方向校正矩阵（根据左右臂相机安装方向不同）
+        self.camera_orientation_correction = self.get_camera_orientation_correction()
         
         # 初始化相机和机械臂
         self.camera = None
@@ -57,6 +62,38 @@ class ArUcoVerification:
             dictionary=self.aruco_dict
         )
         print(f"✓ ArUco板子创建完成: {self.board_size[0]}x{self.board_size[1]}, 标记大小: {self.marker_size}m")
+    
+    def get_camera_orientation_correction(self):
+        """
+        根据左右臂相机安装方向获取校正矩阵
+        
+        返回:
+            4x4校正矩阵
+        """
+        if self.arm_side == 'left':
+            # 左臂相机校正矩阵（假设相机正常安装）
+            correction = np.eye(4)
+            print(f"✓ 左臂相机使用标准方向")
+        else:  # right arm
+            # 右臂相机校正矩阵（相机反向安装）
+            # 根据实际安装情况，可能需要不同的校正矩阵
+            # 这里提供几种常见的校正方案：
+            
+            
+            # 方案2: 翻转X和Y轴方向（保持旋转矩阵正确，只翻转坐标正负）
+            correction = np.array([
+                [-1,  0,  0,  0],  # 翻转X轴方向
+                [ 0, -1,  0,  0],  # 翻转Y轴方向
+                [ 0,  0,  1,  0],  # Z轴保持不变
+                [ 0,  0,  0,  1]
+            ])
+            
+
+            
+            
+            print(f"✓ 右臂相机方向校正矩阵已应用（翻转X和Y轴方向）")
+        
+        return correction
     
     def initialize_systems(self):
         """初始化相机和机械臂系统"""
@@ -146,16 +183,18 @@ class ArUcoVerification:
         
         return image
     
-    def calculate_poses(self, rvec, tvec):
+    def calculate_poses(self, rvec, tvec, debug=False):
         """
-        计算ArUco板相对于机械臂基座的位置
+        计算ArUco板相对于机械臂基座的位置（考虑相机安装方向）
         
         参数:
             rvec: ArUco板相对于相机的旋转向量
             tvec: ArUco板相对于相机的平移向量
+            debug: 是否返回调试信息
             
         返回:
             aruco_to_base: ArUco板相对于机械臂基座的变换矩阵
+            debug_info: 调试信息（如果debug=True）
         """
         # 获取当前机械臂末端位姿
         end_pose = self.robot.get_pose_matrix()  # 4x4变换矩阵
@@ -164,22 +203,31 @@ class ArUcoVerification:
         aruco_to_cam = np.eye(4)
         aruco_to_cam[:3, :3] = cv2.Rodrigues(rvec)[0]
         aruco_to_cam[:3, 3] = tvec.flatten()
-        
-        # 原始方法: T_aruco_to_base = T_end_to_base * T_cam_to_end * T_aruco_to_cam
-        # self.robot.get_pose_matrix() @ hand_eye_matrix @ aruco_to_cam
 
-        # 
+
+        print(f"aruco_to_cam",aruco_to_cam)
+
+        self.hand_eye_matrix[2, 3] = -0.16371493
+        print(f"self.hand_eye_matrix",self.hand_eye_matrix)
         aruco_to_base = end_pose @ self.hand_eye_matrix @ aruco_to_cam
+        print(f"aruco_to_base",aruco_to_base)
+
         
         return aruco_to_base
     
-    def format_pose_output(self, pose_matrix):
+    def format_pose_output(self, pose_matrix, debug_info=None):
         """格式化位姿输出 - 显示ArUco板相对于基座的位置和完整变换矩阵"""
         position = pose_matrix[:3, 3]
         rotation_matrix = pose_matrix[:3, :3]
         
         output = f"ArUco板相对于机械臂基座位置 (mm): X={position[0]*1000:.2f}, Y={position[1]*1000:.2f}, Z={position[2]*1000:.2f}\n"
         output += f"ArUco板相对于机械臂基座变换矩阵:\n{pose_matrix}"
+        
+        if debug_info:
+            output += f"\n\n调试信息:\n"
+            output += f"校正前位姿: {debug_info['before_correction']}\n"
+            output += f"校正后位姿: {debug_info['after_correction']}\n"
+            output += f"相机方向校正矩阵:\n{self.camera_orientation_correction}"
         
         return output
     
@@ -227,11 +275,9 @@ class ArUcoVerification:
                     print("\n" + "="*50)
                     print("检测到ArUco板子，计算位姿...")
                     
-                    # 计算位姿
-                    aruco_to_base = self.calculate_poses(rvec, tvec)
+                    # 计算位姿（带调试信息）
+                    aruco_to_base = self.calculate_poses(rvec, tvec, debug=True)
                     
-                    # 输出结果
-                    print(self.format_pose_output(aruco_to_base))
                     
                     print("="*50)
                 else:
@@ -251,9 +297,12 @@ def main():
     """主函数"""
     try:
         # 创建验证系统
-
-        calibration_file = './hand_eye_calib_right.npy'  # 根据需要修改路径
-        verifier = ArUcoVerification(calibration_file)
+        # 根据使用的机械臂选择对应的标定文件和侧别
+        arm_side = 'right'  # 或 'left'
+        calibration_file = f'./hand_eye_calib_{arm_side}.npy'
+        
+        print(f"使用{arm_side}臂标定文件: {calibration_file}")
+        verifier = ArUcoVerification(calibration_file, arm_side=arm_side)
         
         # 运行验证
         verifier.run_verification()
