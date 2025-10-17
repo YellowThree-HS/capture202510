@@ -13,3 +13,6 @@ wheels/
 weights/
 result/
 others/
+yolo_results_realtime/
+calibration/
+runs/
