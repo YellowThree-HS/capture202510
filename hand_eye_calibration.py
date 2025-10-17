@@ -16,14 +16,14 @@ if not os.path.exists(save_path):
 
 def collect_data(pose,color_image):
     global count
-    with open(f'{save_path}poses.txt', 'a+') as f:
+    with open(f'{save_path}/poses.txt', 'a+') as f:
         # 将列表中的元素用空格连接成一行
         pose_ = [str(i) for i in pose]
         new_line = f'{",".join(pose_)}\n'
         # 将新行附加到文件的末尾
         f.write(new_line)
 
-    cv2.imwrite(save_path + str(count) + '.jpg', color_image)
+    cv2.imwrite(save_path + '/' + str(count) + '.jpg', color_image)
 
     count+=1
     return 
@@ -292,7 +292,7 @@ def main():
                 ret, corners = cv2.findChessboardCorners(gray, (XX, YY), None)
                 
                 if ret:
-                    collect_data(pose,color_image,hand='right')
+                    collect_data(pose,color_image)
                 else:
                     print('没有检测到标定板')
                 # if count >= 5:  # 最少采集5组数据
