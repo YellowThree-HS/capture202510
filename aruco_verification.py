@@ -168,7 +168,14 @@ class ArUcoVerification:
         # 原始方法: T_aruco_to_base = T_end_to_base * T_cam_to_end * T_aruco_to_cam
         # self.robot.get_pose_matrix() @ hand_eye_matrix @ aruco_to_cam
 
-        # 
+        
+
+        self.hand_eye_matrix = np.array([
+            [ 0.01230037,  0.99763761,  0.06758625,  0.08419052],
+            [-0.99992251,  0.01240196, -0.00108365,  0.00995925],
+            [-0.00191929, -0.06756769,  0.99771285, -0.15882536],
+            [ 0.0,         0.0,         0.0,         1.0        ]
+        ])
         aruco_to_base = end_pose @ self.hand_eye_matrix @ aruco_to_cam
         
         return aruco_to_base

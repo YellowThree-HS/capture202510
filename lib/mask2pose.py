@@ -496,7 +496,7 @@ def vector_to_euler(direction_vector):
 
 def extract_spoon_head_center(point_cloud, main_axis, centroid, head_ratio=0.50):
     """
-    识别勺子圆头中心的位置和勺柄姿态
+    识别勺柄中心和勺头中心的位置和姿态
     
     参数:
         point_cloud: 勺子的点云数据
@@ -505,7 +505,9 @@ def extract_spoon_head_center(point_cloud, main_axis, centroid, head_ratio=0.50)
         head_ratio: 勺头占整体长度的比例（默认0.50，即前50%）
     
     返回:
-        head_center: 勺头圆形中心位置 (x, y, z)
+        handle_center: 勺柄中心位置 (x, y, z)
+        handle_radius: 勺柄半径估计
+        head_center: 勺头中心位置 (x, y, z)
         head_radius: 勺头半径估计
         handle_direction: 勺柄方向向量（从勺柄指向勺头）
         handle_pose: 勺柄姿态 [roll, pitch, yaw] (度)
@@ -517,39 +519,54 @@ def extract_spoon_head_center(point_cloud, main_axis, centroid, head_ratio=0.50)
         centered_points = points - centroid
         projections = centered_points @ main_axis
         
-        # 2. 找到投影的最大值（勺头端）
+        # 2. 找到投影的最大值（勺头端）和最小值（勺柄端）
         max_proj = np.max(projections)
         min_proj = np.min(projections)
         length = max_proj - min_proj
         
-        # 3. 确定勺头区域的阈值（前端部分）
-        head_threshold = max_proj - length * head_ratio
+        # 3. 确定勺柄和勺头区域的阈值
+        handle_threshold = min_proj + length * head_ratio  # 勺柄区域（尾端）
+        head_threshold = max_proj - length * head_ratio    # 勺头区域（前端）
         
-        # 4. 提取勺头区域的点云
+        # 4. 提取勺柄区域的点云（投影值小于阈值的是勺柄部分）
+        handle_mask = projections <= handle_threshold
+        handle_points = points[handle_mask]
+        
+        # 5. 提取勺头区域的点云（投影值大于阈值的是勺头部分）
         head_mask = projections >= head_threshold
         head_points = points[head_mask]
         
-        if len(head_points) < 10:
-            return None, None, None, None
+        # 检查是否有足够的点云数据
+        if len(handle_points) < 10 or len(head_points) < 10:
+            return None, None, None, None, None, None
         
-        # 5. 计算勺头中心（勺头区域点云的质心）
+        # 6. 计算勺柄中心（勺柄区域点云的质心）
+        handle_center = np.mean(handle_points, axis=0)
+        
+        # 7. 计算勺头中心（勺头区域点云的质心）
         head_center = np.mean(head_points, axis=0)
         
-        # 6. 估计勺头半径（在垂直于主轴的平面上）
+        # 8. 估计勺柄半径（在垂直于主轴的平面上）
+        handle_centered = handle_points - handle_center
+        perpendicular_components = handle_centered - (handle_centered @ main_axis)[:, np.newaxis] * main_axis
+        perpendicular_distances = np.linalg.norm(perpendicular_components, axis=1)
+        handle_radius = np.mean(perpendicular_distances)
+        
+        # 9. 估计勺头半径（在垂直于主轴的平面上）
         head_centered = head_points - head_center
         perpendicular_components = head_centered - (head_centered @ main_axis)[:, np.newaxis] * main_axis
         perpendicular_distances = np.linalg.norm(perpendicular_components, axis=1)
         head_radius = np.mean(perpendicular_distances)
         
-        # 7. 计算勺柄方向和姿态
+        # 10. 计算勺柄方向和姿态
         handle_direction = main_axis
         handle_roll, handle_pitch, handle_yaw = vector_to_euler(handle_direction)
         handle_pose = [handle_roll, handle_pitch, handle_yaw]
         
-        return head_center, head_radius, handle_direction, handle_pose
+        return handle_center, handle_radius, head_center, head_radius, handle_direction, handle_pose
         
     except Exception as e:
-        return None, None, None, None
+        return None, None, None, None, None, None
 
 
 def extract_elongated_features(point_cloud):
@@ -700,7 +717,7 @@ def calculate_cup_pose_from_trapezoid_matrix(center_3d, normal_3d, trapezoid_poi
         return None
 
 
-def calculate_elongated_pose(center, main_axis, secondary_axis):
+def calculate_elongated_pose(center, main_axis, secondary_axis, force_z_upward=True, force_x_to_head=True):
     """
     根据主轴方向计算细长物体的位姿变换矩阵（PCA法）
     
@@ -708,23 +725,70 @@ def calculate_elongated_pose(center, main_axis, secondary_axis):
         center: 物体中心位置 (x, y, z)
         main_axis: 主轴方向（细长方向）
         secondary_axis: 次要轴方向
+        force_z_upward: 是否强制Z轴指向上方（适用于桌面物体）
+        force_x_to_head: 是否强制X轴指向勺头方向（适用于勺子）
     
     返回:
         4x4变换矩阵
     """
-    # Y轴：主轴方向（勺子的长度方向）
-    y_axis = main_axis / np.linalg.norm(main_axis)
+    # 主轴方向（勺子的长度方向）
+    main_axis_norm = main_axis / np.linalg.norm(main_axis)
     
-    # X轴：次要轴方向
-    x_axis = secondary_axis / np.linalg.norm(secondary_axis)
-    
-    # 确保X轴与Y轴正交
-    x_axis = x_axis - np.dot(x_axis, y_axis) * y_axis
-    x_axis = x_axis / np.linalg.norm(x_axis)
-    
-    # Z轴：通过叉乘得到（垂直于XY平面）
-    z_axis = np.cross(x_axis, y_axis)
-    z_axis = z_axis / np.linalg.norm(z_axis)
+    if force_z_upward:
+        # 对于桌面物体，强制Z轴指向上方（重力方向相反）
+        z_axis = np.array([0, 0, 1])  # 世界坐标系的上方向
+        
+        if force_x_to_head:
+            # 对于勺子，X轴指向勺头方向（主轴方向）
+            x_axis = main_axis_norm
+            
+            # 确保X轴与Z轴正交（将X轴投影到水平面上）
+            x_axis_horizontal = x_axis - np.dot(x_axis, z_axis) * z_axis
+            if np.linalg.norm(x_axis_horizontal) > 1e-6:
+                x_axis = x_axis_horizontal / np.linalg.norm(x_axis_horizontal)
+            else:
+                # 如果X轴几乎垂直，使用次要轴作为X轴
+                x_axis = secondary_axis / np.linalg.norm(secondary_axis)
+                x_axis = x_axis - np.dot(x_axis, z_axis) * z_axis
+                x_axis = x_axis / np.linalg.norm(x_axis)
+            
+            # Y轴：通过叉乘得到（确保右手坐标系）
+            y_axis = np.cross(z_axis, x_axis)
+            y_axis = y_axis / np.linalg.norm(y_axis)
+            
+        else:
+            # 原来的方法：Y轴指向主轴方向
+            y_axis = main_axis_norm
+            
+            # 确保Y轴与Z轴正交（将Y轴投影到水平面上）
+            y_axis_horizontal = y_axis - np.dot(y_axis, z_axis) * z_axis
+            if np.linalg.norm(y_axis_horizontal) > 1e-6:
+                y_axis = y_axis_horizontal / np.linalg.norm(y_axis_horizontal)
+            else:
+                # 如果Y轴几乎垂直，使用次要轴作为Y轴
+                y_axis = secondary_axis / np.linalg.norm(secondary_axis)
+                y_axis = y_axis - np.dot(y_axis, z_axis) * z_axis
+                y_axis = y_axis / np.linalg.norm(y_axis)
+            
+            # X轴：通过叉乘得到（确保右手坐标系）
+            x_axis = np.cross(y_axis, z_axis)
+            x_axis = x_axis / np.linalg.norm(x_axis)
+        
+    else:
+        # 原来的方法：使用PCA结果
+        # Y轴：主轴方向
+        y_axis = main_axis_norm
+        
+        # X轴：次要轴方向
+        x_axis = secondary_axis / np.linalg.norm(secondary_axis)
+        
+        # 确保X轴与Y轴正交
+        x_axis = x_axis - np.dot(x_axis, y_axis) * y_axis
+        x_axis = x_axis / np.linalg.norm(x_axis)
+        
+        # Z轴：通过叉乘得到（垂直于XY平面）
+        z_axis = np.cross(x_axis, y_axis)
+        z_axis = z_axis / np.linalg.norm(z_axis)
     
     # 构建变换矩阵
     T = np.eye(4)
@@ -826,18 +890,24 @@ def mask2pose(mask, depth_image, color_image, intrinsics, T_cam2base=None, objec
                 points = np.asarray(point_cloud.points)
                 centroid = np.mean(points, axis=0)
                 
-                head_center, head_radius, handle_direction, handle_pose = extract_spoon_head_center(
+                handle_center, handle_radius, head_center, head_radius, handle_direction, handle_pose = extract_spoon_head_center(
                     point_cloud, main_axis, centroid, head_ratio=0.30
                 )
                 
-                if head_center is not None:
-                    extra_info['spoon_head_center'] = head_center
-                    extra_info['spoon_head_radius'] = head_radius
+                if handle_center is not None and head_center is not None:
+                    extra_info['spoon_handle_center'] = handle_center  # 勺柄中心
+                    extra_info['spoon_handle_radius'] = handle_radius  # 勺柄半径
+                    extra_info['spoon_head_center'] = head_center      # 勺头中心
+                    extra_info['spoon_head_radius'] = head_radius      # 勺头半径
                     extra_info['handle_direction'] = handle_direction
                     extra_info['handle_pose'] = handle_pose  # [roll, pitch, yaw]
             
             # 计算位姿变换矩阵
-            T = calculate_elongated_pose(center, main_axis, secondary_axis)
+            # 对于勺子，强制Z轴指向上方，X轴指向勺头（适用于桌面物体）
+            force_z_up = (object_class.lower() == 'spoon')
+            force_x_head = (object_class.lower() == 'spoon')
+            T = calculate_elongated_pose(center, main_axis, secondary_axis, 
+                                       force_z_upward=force_z_up, force_x_to_head=force_x_head)
             
             # 转换为位置和欧拉角
             pose = transform_matrix_to_pos_euler(T)

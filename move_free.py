@@ -12,6 +12,8 @@ from cv2 import aruco
 def main():
 
     robot = DobotRobot(robot_ip='192.168.5.2')  # 初始化机械臂
+    # robot_matrix = robot.get_pose_matrix()
+    # print(f"robot",robot_matrix)
     robot.r_inter.StartDrag()
     return 0
     
